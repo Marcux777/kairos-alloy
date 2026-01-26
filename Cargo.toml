@@ -1,0 +1,6 @@
+[workspace]
+members = [
+  "crates/kairos-core",
+  "crates/kairos-cli",
+]
+resolver = "2"

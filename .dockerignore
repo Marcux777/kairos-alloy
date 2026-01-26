@@ -1,0 +1,8 @@
+.git
+.devcontainer
+*.pdf
+*.pdf:Zone.Identifier
+**/.DS_Store
+**/node_modules
+**/target
+**/__pycache__
