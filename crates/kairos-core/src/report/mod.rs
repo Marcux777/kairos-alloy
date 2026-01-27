@@ -76,6 +76,7 @@ pub fn write_summary_json(
     path: &Path,
     summary: &MetricsSummary,
     meta: Option<&SummaryMeta>,
+    config_snapshot: Option<&serde_json::Value>,
 ) -> Result<(), String> {
     let meta_json = meta.map(|meta| {
         serde_json::json!({
@@ -89,6 +90,7 @@ pub fn write_summary_json(
 
     let json = serde_json::json!({
         "meta": meta_json,
+        "config_snapshot": config_snapshot,
         "bars_processed": summary.bars_processed,
         "trades": summary.trades,
         "win_rate": summary.win_rate,
@@ -302,7 +304,8 @@ mod tests {
 
         write_trades_csv(dir.join("trades.csv").as_path(), &trades).expect("trades");
         write_equity_csv(dir.join("equity.csv").as_path(), &equity).expect("equity");
-        write_summary_json(dir.join("summary.json").as_path(), &summary, None).expect("summary");
+        write_summary_json(dir.join("summary.json").as_path(), &summary, None, None)
+            .expect("summary");
         write_logs_jsonl(dir.join("logs.jsonl").as_path(), "run1", &trades, &summary)
             .expect("logs");
 

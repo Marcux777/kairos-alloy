@@ -11,3 +11,4 @@ Root-level docs remain the source of truth:
 ## Contents
 
 - `docs/agent/`: agent HTTP/JSON contract (schemas + examples)
+- `docs/artifacts/`: run artifacts (schemas + headers)

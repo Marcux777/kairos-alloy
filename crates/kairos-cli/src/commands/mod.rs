@@ -179,39 +179,88 @@ fn run_report(input: PathBuf) -> Result<(), String> {
     let equity = read_equity_csv(equity_path.as_path())?;
     let summary = recompute_summary(&trades, &equity);
 
-    let meta = if config_path.exists() {
+    let (meta, config_snapshot, report_html, run_id) = if config_path.exists() {
         match load_config(config_path.as_path()) {
-            Ok(config) => summary_meta_from_equity(&config, &equity),
-            Err(_) => None,
+            Ok(config) => {
+                let meta = summary_meta_from_equity(&config, &equity);
+                let snapshot = serde_json::json!({
+                    "db": {
+                        "exchange": config.db.exchange,
+                        "market": config.db.market,
+                        "ohlcv_table": config.db.ohlcv_table,
+                    },
+                    "costs": {
+                        "fee_bps": config.costs.fee_bps,
+                        "slippage_bps": config.costs.slippage_bps,
+                    },
+                    "risk": {
+                        "max_position_qty": config.risk.max_position_qty,
+                        "max_drawdown_pct": config.risk.max_drawdown_pct,
+                        "max_exposure_pct": config.risk.max_exposure_pct,
+                    },
+                    "orders": {
+                        "size_mode": config.orders.as_ref().and_then(|o| o.size_mode.as_deref()).unwrap_or("qty"),
+                    },
+                    "features": {
+                        "return_mode": config.features.return_mode,
+                        "sma_windows": config.features.sma_windows,
+                        "volatility_windows": config.features.volatility_windows,
+                        "rsi_enabled": config.features.rsi_enabled,
+                        "sentiment_lag": config.features.sentiment_lag,
+                        "sentiment_missing": config.features.sentiment_missing.as_deref().unwrap_or("error"),
+                    },
+                    "agent": {
+                        "mode": config.agent.mode,
+                        "url": config.agent.url,
+                        "timeout_ms": config.agent.timeout_ms,
+                        "retries": config.agent.retries,
+                        "fallback_action": config.agent.fallback_action,
+                        "api_version": config.agent.api_version,
+                        "feature_version": config.agent.feature_version,
+                    },
+                    "data_quality": config.data_quality.as_ref().map(|dq| serde_json::json!({
+                        "max_gaps": dq.max_gaps,
+                        "max_duplicates": dq.max_duplicates,
+                        "max_out_of_order": dq.max_out_of_order,
+                        "max_invalid_close": dq.max_invalid_close,
+                        "max_sentiment_missing": dq.max_sentiment_missing,
+                        "max_sentiment_invalid": dq.max_sentiment_invalid,
+                        "max_sentiment_dropped": dq.max_sentiment_dropped,
+                    })),
+                });
+                let run_id = meta
+                    .as_ref()
+                    .map(|m| m.run_id.clone())
+                    .unwrap_or_else(|| config.run.run_id);
+                let report_html = config
+                    .report
+                    .as_ref()
+                    .and_then(|report| report.html)
+                    .unwrap_or(false);
+                (meta, Some(snapshot), report_html, run_id)
+            }
+            Err(_) => (None, None, false, "report".to_string()),
         }
     } else {
-        None
+        (None, None, false, "report".to_string())
     };
 
-    write_summary_json(input.join("summary.json").as_path(), &summary, meta.as_ref())?;
-    if config_path.exists() {
-        if let Ok(config) = load_config(config_path.as_path()) {
-            if config
-                .report
-                .as_ref()
-                .and_then(|report| report.html)
-                .unwrap_or(false)
-            {
-                write_summary_html(input.join("summary.html").as_path(), &summary, meta.as_ref())?;
-            }
-        }
+    write_summary_json(
+        input.join("summary.json").as_path(),
+        &summary,
+        meta.as_ref(),
+        config_snapshot.as_ref(),
+    )?;
+    if report_html {
+        write_summary_html(input.join("summary.html").as_path(), &summary, meta.as_ref())?;
     }
 
     let end_ts = equity.last().map(|p| p.timestamp).unwrap_or(0);
-    let run_id = meta
-        .as_ref()
-        .map(|m| m.run_id.as_str())
-        .unwrap_or("report");
 
     let mut events = Vec::with_capacity(trades.len() + 2);
     for trade in &trades {
         events.push(AuditEvent {
-            run_id: run_id.to_string(),
+            run_id: run_id.clone(),
             timestamp: trade.timestamp,
             stage: "trade".to_string(),
             action: format!("{:?}", trade.side),
@@ -228,7 +277,7 @@ fn run_report(input: PathBuf) -> Result<(), String> {
     }
 
     events.push(AuditEvent {
-        run_id: run_id.to_string(),
+        run_id: run_id.clone(),
         timestamp: end_ts,
         stage: "report".to_string(),
         action: "recompute".to_string(),
@@ -240,7 +289,7 @@ fn run_report(input: PathBuf) -> Result<(), String> {
     });
 
     events.push(AuditEvent {
-        run_id: run_id.to_string(),
+        run_id: run_id.clone(),
         timestamp: end_ts,
         stage: "summary".to_string(),
         action: "complete".to_string(),
@@ -575,7 +624,57 @@ fn write_outputs(
     write_trades_csv(run_dir.join("trades.csv").as_path(), &results.trades)?;
     write_equity_csv(run_dir.join("equity.csv").as_path(), &results.equity)?;
     let meta = summary_meta_from_equity(config, &results.equity);
-    write_summary_json(run_dir.join("summary.json").as_path(), &results.summary, meta.as_ref())?;
+    let config_snapshot = serde_json::json!({
+        "db": {
+            "exchange": config.db.exchange.clone(),
+            "market": config.db.market.clone(),
+            "ohlcv_table": config.db.ohlcv_table.clone(),
+        },
+        "costs": {
+            "fee_bps": config.costs.fee_bps,
+            "slippage_bps": config.costs.slippage_bps,
+        },
+        "risk": {
+            "max_position_qty": config.risk.max_position_qty,
+            "max_drawdown_pct": config.risk.max_drawdown_pct,
+            "max_exposure_pct": config.risk.max_exposure_pct,
+        },
+        "orders": {
+            "size_mode": config.orders.as_ref().and_then(|o| o.size_mode.as_deref()).unwrap_or("qty"),
+        },
+        "features": {
+            "return_mode": config.features.return_mode.clone(),
+            "sma_windows": config.features.sma_windows.clone(),
+            "volatility_windows": config.features.volatility_windows.clone(),
+            "rsi_enabled": config.features.rsi_enabled,
+            "sentiment_lag": config.features.sentiment_lag.clone(),
+            "sentiment_missing": config.features.sentiment_missing.as_deref().unwrap_or("error"),
+        },
+        "agent": {
+            "mode": config.agent.mode.clone(),
+            "url": config.agent.url.clone(),
+            "timeout_ms": config.agent.timeout_ms,
+            "retries": config.agent.retries,
+            "fallback_action": config.agent.fallback_action.clone(),
+            "api_version": config.agent.api_version.clone(),
+            "feature_version": config.agent.feature_version.clone(),
+        },
+        "data_quality": config.data_quality.as_ref().map(|dq| serde_json::json!({
+            "max_gaps": dq.max_gaps,
+            "max_duplicates": dq.max_duplicates,
+            "max_out_of_order": dq.max_out_of_order,
+            "max_invalid_close": dq.max_invalid_close,
+            "max_sentiment_missing": dq.max_sentiment_missing,
+            "max_sentiment_invalid": dq.max_sentiment_invalid,
+            "max_sentiment_dropped": dq.max_sentiment_dropped,
+        })),
+    });
+    write_summary_json(
+        run_dir.join("summary.json").as_path(),
+        &results.summary,
+        meta.as_ref(),
+        Some(&config_snapshot),
+    )?;
     let mut audit_events = results.audit_events;
     audit_events.append(&mut audit_extras);
     audit_events.sort_by(|a, b| {

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kairos-alloy://artifacts/summary.schema.json",
+  "title": "Kairos Alloy summary.json",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["bars_processed", "trades", "win_rate", "net_profit", "sharpe", "max_drawdown"],
+  "properties": {
+    "meta": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["run_id", "symbol", "timeframe", "start", "end"],
+      "properties": {
+        "run_id": { "type": "string" },
+        "symbol": { "type": "string" },
+        "timeframe": { "type": "string" },
+        "start": { "type": "integer" },
+        "end": { "type": "integer" }
+      }
+    },
+    "config_snapshot": { "type": ["object", "null"] },
+    "bars_processed": { "type": "integer", "minimum": 0 },
+    "trades": { "type": "integer", "minimum": 0 },
+    "win_rate": { "type": "number" },
+    "net_profit": { "type": "number" },
+    "sharpe": { "type": "number" },
+    "max_drawdown": { "type": "number" }
+  }
+}
+
