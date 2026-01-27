@@ -49,7 +49,39 @@ cargo run -p kairos-cli -- backtest --config configs/sample.toml --out runs/
 cargo run -p kairos-cli -- paper --config configs/sample.toml --out runs/
 cargo run -p kairos-cli -- validate --config configs/sample.toml
 cargo run -p kairos-cli -- report --input runs/<run_id>/
+cargo run -p kairos-cli -- --build-info
 ```
+
+## Quickstart (10 minutos)
+
+Em 2 terminais, dentro do ambiente `dev` (Docker):
+
+```bash
+docker compose up -d db
+docker compose run --rm dev
+```
+
+Terminal A (migrate + ingest pequeno):
+
+```bash
+cargo run -p kairos-ingest -- migrate --db-url postgres://kairos:secret@db:5432/kairos
+cargo run -p kairos-ingest -- ingest-kucoin \
+  --db-url postgres://kairos:secret@db:5432/kairos \
+  --symbol BTC-USDT \
+  --market spot \
+  --timeframe 1min \
+  --start 2024-01-01T00:00:00Z \
+  --end 2024-01-02T00:00:00Z
+```
+
+Terminal B (suba o agente dummy e rode o backtest via agente):
+
+```bash
+python3 tools/agent-dummy/agent_dummy.py --host 127.0.0.1 --port 8000 --mode tiny_buy &
+cargo run -p kairos-cli -- backtest --config configs/quickstart.toml --out runs/
+```
+
+Artefatos em `runs/quickstart_btc_usdt_1min/`.
 
 ## Ambiente de construção (Docker)
 

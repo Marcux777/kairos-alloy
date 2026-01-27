@@ -1,0 +1,57 @@
+[run]
+run_id = "quickstart_btc_usdt_1min"
+symbol = "BTC-USDT"
+timeframe = "1min"
+initial_capital = 10000.0
+
+[db]
+# If running inside `docker compose run --rm dev`, keep host as `db`.
+# If running on your host machine, use `localhost` instead.
+url = "postgres://kairos:secret@db:5432/kairos"
+ohlcv_table = "ohlcv_candles"
+exchange = "kucoin"
+market = "spot"
+
+[paths]
+out_dir = "runs/"
+
+[costs]
+fee_bps = 10.0
+slippage_bps = 5.0
+
+[risk]
+max_position_qty = 1.0
+max_drawdown_pct = 0.30
+max_exposure_pct = 1.00
+
+[orders]
+# "qty" | "pct_equity"
+size_mode = "qty"
+
+[features]
+return_mode = "log"
+sma_windows = [10, 50]
+volatility_windows = [10]
+rsi_enabled = false
+sentiment_lag = "5m"
+sentiment_missing = "error"
+
+[agent]
+mode = "remote"
+url = "http://127.0.0.1:8000"
+timeout_ms = 200
+retries = 1
+fallback_action = "HOLD"
+api_version = "v1"
+feature_version = "v1"
+
+[metrics]
+risk_free_rate = 0.0
+annualization_factor = 365.0
+
+[paper]
+replay_scale = 60
+
+[report]
+html = false
+
