@@ -5,7 +5,7 @@ use kairos_core::market_data::{MarketDataSource, VecBarSource};
 use kairos_core::metrics::MetricsConfig;
 use kairos_core::report::{
     read_equity_csv, read_trades_csv, recompute_summary, write_audit_jsonl, write_equity_csv,
-    write_logs_jsonl, write_summary_html, write_summary_json, write_trades_csv, AuditEvent,
+    write_summary_html, write_summary_json, write_trades_csv, AuditEvent,
     SummaryMeta,
 };
 use kairos_core::risk::RiskLimits;
@@ -154,6 +154,7 @@ fn run_validate(config_path: PathBuf, strict: bool, out: Option<PathBuf>) -> Res
 fn run_report(input: PathBuf) -> Result<(), String> {
     let trades_path = input.join("trades.csv");
     let equity_path = input.join("equity.csv");
+    let config_path = input.join("config_snapshot.toml");
 
     if !trades_path.exists() || !equity_path.exists() {
         return Err(format!(
@@ -166,8 +167,83 @@ fn run_report(input: PathBuf) -> Result<(), String> {
     let equity = read_equity_csv(equity_path.as_path())?;
     let summary = recompute_summary(&trades, &equity);
 
-    write_summary_json(input.join("summary.json").as_path(), &summary, None)?;
-    write_logs_jsonl(input.join("logs.jsonl").as_path(), "report", &trades, &summary)?;
+    let meta = if config_path.exists() {
+        match load_config(config_path.as_path()) {
+            Ok(config) => summary_meta_from_equity(&config, &equity),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    write_summary_json(input.join("summary.json").as_path(), &summary, meta.as_ref())?;
+
+    let end_ts = equity.last().map(|p| p.timestamp).unwrap_or(0);
+    let run_id = meta
+        .as_ref()
+        .map(|m| m.run_id.as_str())
+        .unwrap_or("report");
+
+    let mut events = Vec::with_capacity(trades.len() + 2);
+    for trade in &trades {
+        events.push(AuditEvent {
+            run_id: run_id.to_string(),
+            timestamp: trade.timestamp,
+            stage: "trade".to_string(),
+            action: format!("{:?}", trade.side),
+            details: serde_json::json!({
+                "symbol": trade.symbol,
+                "qty": trade.quantity,
+                "price": trade.price,
+                "fee": trade.fee,
+                "slippage": trade.slippage,
+                "strategy_id": trade.strategy_id,
+                "reason": trade.reason,
+            }),
+        });
+    }
+
+    events.push(AuditEvent {
+        run_id: run_id.to_string(),
+        timestamp: end_ts,
+        stage: "report".to_string(),
+        action: "recompute".to_string(),
+        details: serde_json::json!({
+            "input_dir": input.display().to_string(),
+            "trades": trades.len(),
+            "bars_processed": summary.bars_processed,
+        }),
+    });
+
+    events.push(AuditEvent {
+        run_id: run_id.to_string(),
+        timestamp: end_ts,
+        stage: "summary".to_string(),
+        action: "complete".to_string(),
+        details: serde_json::json!({
+            "meta": meta.as_ref().map(|m| serde_json::json!({
+                "run_id": m.run_id,
+                "symbol": m.symbol,
+                "timeframe": m.timeframe,
+                "start": m.start,
+                "end": m.end,
+            })),
+            "bars_processed": summary.bars_processed,
+            "trades": summary.trades,
+            "win_rate": summary.win_rate,
+            "net_profit": summary.net_profit,
+            "sharpe": summary.sharpe,
+            "max_drawdown": summary.max_drawdown,
+        }),
+    });
+
+    events.sort_by(|a, b| {
+        a.timestamp
+            .cmp(&b.timestamp)
+            .then_with(|| a.stage.cmp(&b.stage))
+            .then_with(|| a.action.cmp(&b.action))
+    });
+    write_audit_jsonl(input.join("logs.jsonl").as_path(), &events)?;
 
     println!(
         "{} cli: report regenerated (trades={}, bars={})",
@@ -277,6 +353,7 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
             "duplicates": data_report.duplicates,
             "gaps": data_report.gaps,
             "out_of_order": data_report.out_of_order,
+            "invalid_close": data_report.invalid_close,
         }),
     ));
 
@@ -294,10 +371,19 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
         } else {
             sentiment::load_csv_with_policy(path_buf.as_path(), missing_policy)?
         };
-        if report.duplicates > 0 || report.out_of_order > 0 {
+        if report.duplicates > 0
+            || report.out_of_order > 0
+            || report.missing_values > 0
+            || report.invalid_values > 0
+            || report.dropped_rows > 0
+        {
             println!(
-                "sentiment report: duplicates={}, out_of_order={}",
-                report.duplicates, report.out_of_order
+                "sentiment report: duplicates={}, out_of_order={}, missing_values={}, invalid_values={}, dropped_rows={}",
+                report.duplicates,
+                report.out_of_order,
+                report.missing_values,
+                report.invalid_values,
+                report.dropped_rows
             );
         }
         audit_extras.push(timing_event(
@@ -310,6 +396,10 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
                 "rows": points.len(),
                 "duplicates": report.duplicates,
                 "out_of_order": report.out_of_order,
+                "missing_values": report.missing_values,
+                "invalid_values": report.invalid_values,
+                "dropped_rows": report.dropped_rows,
+                "schema": report.schema,
             }),
         ));
         Some(points)
@@ -317,10 +407,17 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
         None
     };
 
-    if data_report.duplicates > 0 || data_report.gaps > 0 || data_report.out_of_order > 0 {
+    if data_report.duplicates > 0
+        || data_report.gaps > 0
+        || data_report.out_of_order > 0
+        || data_report.invalid_close > 0
+    {
         println!(
-            "ohlcv report: duplicates={}, gaps={}, out_of_order={}",
-            data_report.duplicates, data_report.gaps, data_report.out_of_order
+            "ohlcv report: duplicates={}, gaps={}, out_of_order={}, invalid_close={}",
+            data_report.duplicates,
+            data_report.gaps,
+            data_report.out_of_order,
+            data_report.invalid_close
         );
     }
 
@@ -631,13 +728,21 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
             "duplicates": data_report.duplicates,
             "gaps": data_report.gaps,
             "out_of_order": data_report.out_of_order,
+            "invalid_close": data_report.invalid_close,
         }),
     ));
 
-    if data_report.duplicates > 0 || data_report.gaps > 0 || data_report.out_of_order > 0 {
+    if data_report.duplicates > 0
+        || data_report.gaps > 0
+        || data_report.out_of_order > 0
+        || data_report.invalid_close > 0
+    {
         println!(
-            "ohlcv report: duplicates={}, gaps={}, out_of_order={}",
-            data_report.duplicates, data_report.gaps, data_report.out_of_order
+            "ohlcv report: duplicates={}, gaps={}, out_of_order={}, invalid_close={}",
+            data_report.duplicates,
+            data_report.gaps,
+            data_report.out_of_order,
+            data_report.invalid_close
         );
     }
 
@@ -655,10 +760,19 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
         } else {
             sentiment::load_csv_with_policy(path_buf.as_path(), missing_policy)?
         };
-        if report.duplicates > 0 || report.out_of_order > 0 {
+        if report.duplicates > 0
+            || report.out_of_order > 0
+            || report.missing_values > 0
+            || report.invalid_values > 0
+            || report.dropped_rows > 0
+        {
             println!(
-                "sentiment report: duplicates={}, out_of_order={}",
-                report.duplicates, report.out_of_order
+                "sentiment report: duplicates={}, out_of_order={}, missing_values={}, invalid_values={}, dropped_rows={}",
+                report.duplicates,
+                report.out_of_order,
+                report.missing_values,
+                report.invalid_values,
+                report.dropped_rows
             );
         }
         audit_extras.push(timing_event(
@@ -671,6 +785,10 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
                 "rows": points.len(),
                 "duplicates": report.duplicates,
                 "out_of_order": report.out_of_order,
+                "missing_values": report.missing_values,
+                "invalid_values": report.invalid_values,
+                "dropped_rows": report.dropped_rows,
+                "schema": report.schema,
             }),
         ));
         Some(points)
