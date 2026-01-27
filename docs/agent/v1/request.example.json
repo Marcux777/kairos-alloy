@@ -2,15 +2,14 @@
   "api_version": "v1",
   "feature_version": "v1",
   "run_id": "btc_usdt_1min_2024q1",
-  "timestamp": "2026-01-01T00:00:00Z",
+  "timestamp": "2024-01-01T00:00:00Z",
   "symbol": "BTC-USDT",
   "timeframe": "1min",
-  "observation": [0.0012, 0.0031, 0.12, 0.08],
+  "observation": [0.0, 0.0012, 0.0, 10.0, 50.0],
   "portfolio_state": {
-    "cash": 9950.0,
-    "position_qty": 0.1,
-    "position_avg_price": 45000.0,
-    "equity": 10020.0
+    "cash": 10000.0,
+    "position_qty": 0.0,
+    "position_avg_price": 0.0,
+    "equity": 10000.0
   }
 }
-

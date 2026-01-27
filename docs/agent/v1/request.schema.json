@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "kairos-alloy://agent/v1/request.schema.json",
-  "title": "Kairos Alloy Agent Request (v1)",
+  "$id": "https://kairos-alloy.local/schemas/agent/v1/request.schema.json",
+  "title": "Kairos Alloy Agent ActionRequest (v1)",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -18,7 +18,11 @@
     "api_version": { "type": "string", "minLength": 1 },
     "feature_version": { "type": "string", "minLength": 1 },
     "run_id": { "type": "string", "minLength": 1 },
-    "timestamp": { "type": "string", "format": "date-time" },
+    "timestamp": {
+      "type": "string",
+      "description": "UTC timestamp. RFC3339 recomendado.",
+      "minLength": 1
+    },
     "symbol": { "type": "string", "minLength": 1 },
     "timeframe": { "type": "string", "minLength": 1 },
     "observation": {
@@ -38,4 +42,3 @@
     }
   }
 }
-
