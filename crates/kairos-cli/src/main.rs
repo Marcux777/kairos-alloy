@@ -25,6 +25,20 @@ enum CliCommand {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    Bench {
+        /// Number of synthetic bars to generate (default: 500_000).
+        #[arg(long, default_value_t = 500_000)]
+        bars: usize,
+        /// Timeframe step in seconds for timestamps (default: 60).
+        #[arg(long, default_value_t = 60)]
+        step_seconds: i64,
+        /// Benchmark mode: engine (baseline strategy) or features (feature pipeline + HOLD).
+        #[arg(long, default_value = "features")]
+        mode: String,
+        /// Print a single JSON line instead of human output.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     Paper {
         #[arg(long)]
         config: PathBuf,
@@ -50,6 +64,17 @@ fn main() {
     let cli = Cli::parse();
     let command = match cli.command {
         CliCommand::Backtest { config, out } => Command::Backtest { config, out },
+        CliCommand::Bench {
+            bars,
+            step_seconds,
+            mode,
+            json,
+        } => Command::Bench {
+            bars,
+            step_seconds,
+            mode,
+            json,
+        },
         CliCommand::Paper { config, out } => Command::Paper { config, out },
         CliCommand::Validate { config, strict, out } => Command::Validate {
             config,

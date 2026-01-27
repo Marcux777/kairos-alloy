@@ -17,6 +17,14 @@ cargo build
 cargo run -p kairos-cli
 ```
 
+## Benchmark de performance (PRD)
+
+Rodar benchmark sintético de 500k barras em `--release` (mede throughput do engine e pipeline de features):
+
+```bash
+cargo run -p kairos-cli --release -- bench --bars 500000 --mode features --json
+```
+
 ## Ingestao OHLCV (PostgreSQL)
 
 Migracao da tabela e ingestao de candles KuCoin:
