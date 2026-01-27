@@ -31,6 +31,117 @@ pub struct OhlcvRecord {
     pub volume: f64,
 }
 
+pub fn data_quality_from_bars(bars: &[Bar], expected_step_seconds: Option<i64>) -> DataQualityReport {
+    let mut report = DataQualityReport::default();
+    if bars.is_empty() {
+        return report;
+    }
+
+    let step = expected_step_seconds.unwrap_or(1).max(1);
+    report.first_timestamp = Some(bars[0].timestamp);
+    report.last_timestamp = Some(bars[bars.len() - 1].timestamp);
+
+    let mut last_ts: Option<i64> = None;
+    let mut max_gap: Option<i64> = None;
+
+    for bar in bars {
+        let ts = bar.timestamp;
+
+        if let Some(prev) = last_ts {
+            if ts == prev {
+                report.duplicates += 1;
+                if report.first_duplicate.is_none() {
+                    report.first_duplicate = Some(ts);
+                }
+            } else if ts < prev {
+                report.out_of_order += 1;
+                if report.first_out_of_order.is_none() {
+                    report.first_out_of_order = Some(ts);
+                }
+            } else {
+                let diff = ts - prev;
+                if diff > step {
+                    report.gaps += 1;
+                    report.gap_count += 1;
+                    if report.first_gap.is_none() {
+                        report.first_gap = Some(ts);
+                    }
+                    max_gap = Some(max_gap.map_or(diff, |current| current.max(diff)));
+                }
+            }
+        }
+
+        last_ts = Some(ts);
+        report.last_timestamp = Some(ts);
+    }
+
+    report.max_gap_seconds = max_gap;
+    report
+}
+
+pub fn resample_bars(bars: &[Bar], target_step_seconds: i64) -> Result<Vec<Bar>, String> {
+    if target_step_seconds <= 0 {
+        return Err("target_step_seconds must be > 0".to_string());
+    }
+    if bars.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut output = Vec::new();
+    let mut current_bucket_start: Option<i64> = None;
+    let mut bucket: Option<Bar> = None;
+
+    for bar in bars {
+        let bucket_start = bar
+            .timestamp
+            .saturating_sub(bar.timestamp.rem_euclid(target_step_seconds));
+
+        match current_bucket_start {
+            None => {
+                current_bucket_start = Some(bucket_start);
+                bucket = Some(Bar {
+                    symbol: bar.symbol.clone(),
+                    timestamp: bucket_start,
+                    open: bar.open,
+                    high: bar.high,
+                    low: bar.low,
+                    close: bar.close,
+                    volume: bar.volume,
+                });
+            }
+            Some(active_start) if active_start == bucket_start => {
+                if let Some(ref mut agg) = bucket {
+                    agg.high = agg.high.max(bar.high);
+                    agg.low = agg.low.min(bar.low);
+                    agg.close = bar.close;
+                    agg.volume += bar.volume;
+                }
+            }
+            Some(_) => {
+                if let Some(agg) = bucket.take() {
+                    output.push(agg);
+                }
+                current_bucket_start = Some(bucket_start);
+                bucket = Some(Bar {
+                    symbol: bar.symbol.clone(),
+                    timestamp: bucket_start,
+                    open: bar.open,
+                    high: bar.high,
+                    low: bar.low,
+                    close: bar.close,
+                    volume: bar.volume,
+                });
+            }
+        }
+    }
+
+    if let Some(agg) = bucket {
+        output.push(agg);
+    }
+
+    Ok(output)
+}
+
 pub fn load_csv(path: &Path) -> Result<(Vec<Bar>, DataQualityReport), String> {
     let file = File::open(path)
         .map_err(|err| format!("failed to open OHLCV CSV {}: {}", path.display(), err))?;
@@ -224,7 +335,7 @@ fn parse_timestamp(value: &str) -> Result<i64, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_csv, validate_table_name};
+    use super::{data_quality_from_bars, load_csv, resample_bars, validate_table_name};
     use std::fs;
     use std::path::Path;
 
@@ -250,5 +361,43 @@ mod tests {
         assert!(validate_table_name("public.ohlcv_candles").is_ok());
         assert!(validate_table_name("").is_err());
         assert!(validate_table_name("ohlcv;drop").is_err());
+    }
+
+    #[test]
+    fn resample_bars_aggregates_ohlcv() {
+        let bars = vec![
+            crate::types::Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 0,
+                open: 10.0,
+                high: 11.0,
+                low: 9.0,
+                close: 10.5,
+                volume: 1.0,
+            },
+            crate::types::Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 60,
+                open: 10.5,
+                high: 12.0,
+                low: 10.0,
+                close: 11.0,
+                volume: 2.0,
+            },
+        ];
+
+        let resampled = resample_bars(&bars, 120).expect("resample");
+        assert_eq!(resampled.len(), 1);
+        assert_eq!(resampled[0].timestamp, 0);
+        assert!((resampled[0].open - 10.0).abs() < 1e-9);
+        assert!((resampled[0].high - 12.0).abs() < 1e-9);
+        assert!((resampled[0].low - 9.0).abs() < 1e-9);
+        assert!((resampled[0].close - 11.0).abs() < 1e-9);
+        assert!((resampled[0].volume - 3.0).abs() < 1e-9);
+
+        let report = data_quality_from_bars(&resampled, Some(120));
+        assert_eq!(report.gaps, 0);
+        assert_eq!(report.duplicates, 0);
+        assert_eq!(report.out_of_order, 0);
     }
 }

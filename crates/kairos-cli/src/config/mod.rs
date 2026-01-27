@@ -33,6 +33,7 @@ pub struct DbConfig {
     pub ohlcv_table: String,
     pub exchange: String,
     pub market: String,
+    pub source_timeframe: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

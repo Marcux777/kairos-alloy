@@ -219,19 +219,50 @@ fn run_validate(config_path: PathBuf, strict: bool, out: Option<PathBuf>) -> Res
 
     let expected_step = parse_duration_like(&config.run.timeframe)?;
     let timeframe_label = normalize_timeframe_label(&config.run.timeframe)?;
+    let source_timeframe_label = normalize_timeframe_label(
+        config
+            .db
+            .source_timeframe
+            .as_deref()
+            .unwrap_or(&timeframe_label),
+    )?;
+    let source_step = parse_duration_like(&source_timeframe_label)?;
     let exchange = config.db.exchange.to_lowercase();
     let market = config.db.market.to_lowercase();
-    let (_, ohlcv_report) = ohlcv::load_postgres(
+    let (source_bars, source_report) = ohlcv::load_postgres(
         &config.db.url,
         &config.db.ohlcv_table,
         &exchange,
         &market,
         &config.run.symbol,
-        &timeframe_label,
-        Some(expected_step),
+        &source_timeframe_label,
+        Some(source_step),
     )?;
+    let source_rows = source_bars.len();
+    let (ohlcv_report, ohlcv_source_report, effective_rows, resampled) =
+        if source_timeframe_label != timeframe_label {
+        if source_step > expected_step {
+            return Err(format!(
+                "cannot resample OHLCV: source timeframe ({}) is larger than run timeframe ({})",
+                source_timeframe_label, timeframe_label
+            ));
+        }
+        let resampled_bars = ohlcv::resample_bars(&source_bars, expected_step)?;
+        let report = ohlcv::data_quality_from_bars(&resampled_bars, Some(expected_step));
+        (report, Some(source_report), resampled_bars.len(), true)
+    } else {
+        (source_report, None, source_rows, false)
+    };
+
+    if let Some(source) = &ohlcv_source_report {
+        println!(
+            "ohlcv source report (timeframe={}): duplicates={}, gaps={}, out_of_order={}, invalid_close={}",
+            source_timeframe_label, source.duplicates, source.gaps, source.out_of_order, source.invalid_close
+        );
+    }
     println!(
-        "ohlcv report: duplicates={}, gaps={}, out_of_order={}, invalid_close={}",
+        "ohlcv report{}: duplicates={}, gaps={}, out_of_order={}, invalid_close={}",
+        if resampled { " (resampled)" } else { "" },
         ohlcv_report.duplicates,
         ohlcv_report.gaps,
         ohlcv_report.out_of_order,
@@ -296,7 +327,31 @@ fn run_validate(config_path: PathBuf, strict: bool, out: Option<PathBuf>) -> Res
 
     if let Some(out_path) = out {
         let report_json = serde_json::json!({
+            "ohlcv_resample": if resampled { serde_json::json!({
+                "from_timeframe": source_timeframe_label,
+                "to_timeframe": timeframe_label,
+                "source_step_seconds": source_step,
+                "target_step_seconds": expected_step,
+                "source_rows": source_rows,
+                "resampled_rows": effective_rows,
+            }) } else { serde_json::Value::Null },
+            "ohlcv_source": ohlcv_source_report.as_ref().map(|r| serde_json::json!({
+                "rows": source_rows,
+                "duplicates": r.duplicates,
+                "gaps": r.gaps,
+                "out_of_order": r.out_of_order,
+                "invalid_close": r.invalid_close,
+                "first_timestamp": r.first_timestamp,
+                "last_timestamp": r.last_timestamp,
+                "first_gap": r.first_gap,
+                "first_duplicate": r.first_duplicate,
+                "first_out_of_order": r.first_out_of_order,
+                "first_invalid_close": r.first_invalid_close,
+                "max_gap_seconds": r.max_gap_seconds,
+                "gap_count": r.gap_count,
+            })),
             "ohlcv": {
+                "rows": effective_rows,
                 "duplicates": ohlcv_report.duplicates,
                 "gaps": ohlcv_report.gaps,
                 "out_of_order": ohlcv_report.out_of_order,
@@ -511,11 +566,16 @@ fn print_config_summary(command: &str, config: &Config, out: Option<&PathBuf>) {
         config.run.initial_capital
     );
     println!(
-        "data: db_url={}, table={}, exchange={}, market={}, sentiment={}, out_dir={}",
+        "data: db_url={}, table={}, exchange={}, market={}, source_timeframe={}, sentiment={}, out_dir={}",
         config.db.url,
         config.db.ohlcv_table,
         config.db.exchange,
         config.db.market,
+        config
+            .db
+            .source_timeframe
+            .as_deref()
+            .unwrap_or("same_as_run"),
         config
             .paths
             .sentiment_path
@@ -576,18 +636,53 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
 
     let expected_step = parse_duration_like(&config.run.timeframe)?;
     let timeframe_label = normalize_timeframe_label(&config.run.timeframe)?;
+    let source_timeframe_label = normalize_timeframe_label(
+        config
+            .db
+            .source_timeframe
+            .as_deref()
+            .unwrap_or(&timeframe_label),
+    )?;
+    let source_step = parse_duration_like(&source_timeframe_label)?;
     let exchange = config.db.exchange.to_lowercase();
     let market = config.db.market.to_lowercase();
     let stage_start = Instant::now();
-    let (bars, data_report) = ohlcv::load_postgres(
+    let (source_bars, source_report) = ohlcv::load_postgres(
         &config.db.url,
         &config.db.ohlcv_table,
         &exchange,
         &market,
         &config.run.symbol,
-        &timeframe_label,
-        Some(expected_step),
+        &source_timeframe_label,
+        Some(source_step),
     )?;
+    let (bars, data_report, resampled) = if source_timeframe_label != timeframe_label {
+        if source_step > expected_step {
+            return Err(format!(
+                "cannot resample OHLCV: source timeframe ({}) is larger than run timeframe ({})",
+                source_timeframe_label, timeframe_label
+            ));
+        }
+        let resample_start = Instant::now();
+        let resampled_bars = ohlcv::resample_bars(&source_bars, expected_step)?;
+        let report = ohlcv::data_quality_from_bars(&resampled_bars, Some(expected_step));
+        audit_extras.push(timing_event(
+            &config.run.run_id,
+            0,
+            "timing",
+            "resample_ohlcv",
+            resample_start.elapsed().as_millis() as u64,
+            serde_json::json!({
+                "from_timeframe": source_timeframe_label,
+                "to_timeframe": timeframe_label,
+                "source_rows": source_bars.len(),
+                "resampled_rows": resampled_bars.len(),
+            }),
+        ));
+        (resampled_bars, report, true)
+    } else {
+        (source_bars, source_report, false)
+    };
     audit_extras.push(timing_event(
         &config.run.run_id,
         0,
@@ -600,6 +695,7 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
             "gaps": data_report.gaps,
             "out_of_order": data_report.out_of_order,
             "invalid_close": data_report.invalid_close,
+            "resampled": resampled,
         }),
     ));
 
@@ -1001,18 +1097,53 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
 
     let expected_step = parse_duration_like(&config.run.timeframe)?;
     let timeframe_label = normalize_timeframe_label(&config.run.timeframe)?;
+    let source_timeframe_label = normalize_timeframe_label(
+        config
+            .db
+            .source_timeframe
+            .as_deref()
+            .unwrap_or(&timeframe_label),
+    )?;
+    let source_step = parse_duration_like(&source_timeframe_label)?;
     let exchange = config.db.exchange.to_lowercase();
     let market = config.db.market.to_lowercase();
     let stage_start = Instant::now();
-    let (bars, data_report) = ohlcv::load_postgres(
+    let (source_bars, source_report) = ohlcv::load_postgres(
         &config.db.url,
         &config.db.ohlcv_table,
         &exchange,
         &market,
         &config.run.symbol,
-        &timeframe_label,
-        Some(expected_step),
+        &source_timeframe_label,
+        Some(source_step),
     )?;
+    let (bars, data_report, resampled) = if source_timeframe_label != timeframe_label {
+        if source_step > expected_step {
+            return Err(format!(
+                "cannot resample OHLCV: source timeframe ({}) is larger than run timeframe ({})",
+                source_timeframe_label, timeframe_label
+            ));
+        }
+        let resample_start = Instant::now();
+        let resampled_bars = ohlcv::resample_bars(&source_bars, expected_step)?;
+        let report = ohlcv::data_quality_from_bars(&resampled_bars, Some(expected_step));
+        audit_extras.push(timing_event(
+            &config.run.run_id,
+            0,
+            "timing",
+            "resample_ohlcv",
+            resample_start.elapsed().as_millis() as u64,
+            serde_json::json!({
+                "from_timeframe": source_timeframe_label,
+                "to_timeframe": timeframe_label,
+                "source_rows": source_bars.len(),
+                "resampled_rows": resampled_bars.len(),
+            }),
+        ));
+        (resampled_bars, report, true)
+    } else {
+        (source_bars, source_report, false)
+    };
     audit_extras.push(timing_event(
         &config.run.run_id,
         0,
@@ -1025,6 +1156,7 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
             "gaps": data_report.gaps,
             "out_of_order": data_report.out_of_order,
             "invalid_close": data_report.invalid_close,
+            "resampled": resampled,
         }),
     ));
 
