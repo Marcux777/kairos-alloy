@@ -37,9 +37,10 @@
 - [14. Premissas e restrições](#14-premissas-e-restrições)
 - [15. Dependências e integrações](#15-dependências-e-integrações)
 - [16. Dados e formatos](#16-dados-e-formatos)
-  - [16.1 Formato OHLCV (CSV)](#161-formato-ohlcv-csv)
-  - [16.2 Formato de sentimento (CSV/JSON)](#162-formato-de-sentimento-csvjson)
-  - [16.3 Resampling e alinhamento temporal](#163-resampling-e-alinhamento-temporal)
+- [16.1 Formato OHLCV (PostgreSQL)](#161-formato-ohlcv-postgresql)
+- [16.2 Formato de sentimento (CSV/JSON)](#162-formato-de-sentimento-csvjson)
+- [16.3 Resampling e alinhamento temporal](#163-resampling-e-alinhamento-temporal)
+- [16.4 Fonte OHLCV (KuCoin)](#164-fonte-ohlcv-kucoin)
 - [17. Critérios de aceitação por módulo](#17-critérios-de-aceitação-por-módulo)
   - [17.1 CLI](#171-cli)
   - [17.2 Data](#172-data)
@@ -96,7 +97,7 @@ Entregar um aplicativo de linha de comando (CLI) em Rust que rode backtests e pa
 
 ### 5.1 Em escopo (MVP)
 
-- Importação de dados históricos de preço (OHLCV) a partir de arquivos (CSV como padrão do MVP).
+- Ingestão de dados históricos de preço (OHLCV) via API e armazenamento obrigatório em PostgreSQL (leitura do backtest somente pelo banco).
 - Importação de dados de sentimento (séries temporais agregadas por janela) a partir de arquivos (CSV/JSON).
 - Sincronização temporal entre preço e sentimento (resampling por timeframe configurável).
 - Motor de backtesting baseado em barras (bar-based), com execução de ordens a mercado e custos (fee, slippage configuráveis).
@@ -120,7 +121,7 @@ Entregar um aplicativo de linha de comando (CLI) em Rust que rode backtests e pa
 ### 6.1 CLI e configuração
 
 - O sistema deve expor um comando principal (kairos-alloy) com subcomandos: backtest, paper, validate, report.
-- O sistema deve aceitar um arquivo de configuração (TOML) contendo paths de dados, timeframe, custos, limites de risco e parâmetros do agente.
+- O sistema deve aceitar um arquivo de configuração (TOML) contendo conexão do banco, timeframe, custos, limites de risco e parâmetros do agente.
 - O sistema deve permitir seleção de estratégia: baseline (interna) ou agente externo (API).
 
 **Comportamento esperado (MVP)**
@@ -138,10 +139,11 @@ Entregar um aplicativo de linha de comando (CLI) em Rust que rode backtests e pa
 
 ### 6.2 Ingestão de dados
 
-- Carregar OHLCV com timestamp UTC e campos: open, high, low, close, volume.
+- Carregar OHLCV do PostgreSQL com timestamp UTC e campos: open, high, low, close, volume (e turnover quando disponível).
 - Carregar série de sentimento com timestamp UTC e campos numéricos (ex.: score, volume_mencoes).
 - Validar consistência: timestamps ordenados, duplicatas, gaps; gerar warnings e relatório de qualidade de dados.
 - Aplicar regra de disponibilidade temporal para sentimento para evitar look-ahead bias: ao construir a observation no tempo t, usar apenas valores de sentimento com timestamp <= (t - sentiment_lag).
+- A ingestão de OHLCV deve ser idempotente (upsert) com chave única por exchange/mercado/símbolo/timeframe/timestamp.
 
 **Políticas sugeridas (MVP)**
 
@@ -228,7 +230,7 @@ Response:
 Arquitetura modular em Rust, com separação clara entre domínio, infraestrutura e integração.
 
 - core: tipos de domínio (Bar, Order, Trade, Portfolio, Metrics).
-- data: loaders/parsers (CSV) e validação.
+- data: ingestor de OHLCV (API) + persistência em PostgreSQL + validação.
 - features: cálculo de indicadores e montagem do observation.
 - engine: loop de backtest, execução simulada, geração de reward (opcional).
 - risk: validação de ordens e limites.
@@ -238,7 +240,7 @@ Arquitetura modular em Rust, com separação clara entre domínio, infraestrutur
 
 ## 9. Critérios de sucesso do MVP
 
-- Rodar um backtest completo (ex.: BTCUSD) a partir de um dataset histórico exportado, gerando artefatos de resultado.
+- Rodar um backtest completo (ex.: BTCUSD) a partir de um dataset histórico no PostgreSQL, gerando artefatos de resultado.
 - Rodar o mesmo backtest com estratégia baseline e com agente externo, permitindo comparação direta.
 - Gerar métricas (Lucro líquido, Sharpe, Max Drawdown) e logs para auditoria.
 - Executar paper trading com feed simulado em tempo real (replay) por no mínimo 1 hora sem falhas.
@@ -250,7 +252,7 @@ Cronograma alinhado às fases de implementação/validação do plano de trabalh
 | Milestone | Entrega | Conteúdo | Critério de aceite |
 | --- | --- | --- | --- |
 | M0 | Setup | Repo Rust + CLI base + config TOML + logging | Compila e roda `kairos-alloy --help` |
-| M1 | Data | Loader OHLCV + sentimento + validação | Carrega dataset e imprime resumo |
+| M1 | Data | Ingestor OHLCV -> PostgreSQL + sentimento + validação | Carrega dataset e imprime resumo |
 | M2a | Engine | Loop do backtest: iteração por barras + sincronização temporal + cálculo de indicadores/features | Itera sobre dataset e produz observation por barra (sem ordens) |
 | M2b | Orders | Execução simulada + ordens (buy/sell/hold) + PnL + trades | Gera trades.csv e equity.csv com baseline |
 | M3 | Metrics | Lucro, Sharpe, Max Drawdown + summary.json | Métricas batem com caso de teste |
@@ -267,7 +269,8 @@ Cronograma alinhado às fases de implementação/validação do plano de trabalh
 ## 12. Questões em aberto (para fechar na primeira sprint)
 
 - Timeframe alvo do MVP (1-min, 5-min, 1h) para o backtest principal.
-- Formato do dataset exportado (CSV vs Parquet) e campos disponíveis do MetaTrader 5.
+- Decisão de fonte primária de OHLCV (MT5 vs KuCoin Spot/Futures), pares e período de coleta.
+- Schema do banco de OHLCV (campos finais, tipos, particionamento e índices).
 - Conjunto mínimo de features para observation e como representar sentimento (score único vs múltiplos sinais).
 - Política de slippage e fee (fixo, percentual, spread).
 - Definição final do vetor observation: campos, ordem, tipos e responsabilidade de normalização (Rust vs Python).
@@ -279,7 +282,8 @@ Cronograma alinhado às fases de implementação/validação do plano de trabalh
 | Questão | Impacto | Responsável |
 | --- | --- | --- |
 | Timeframe alvo do MVP (1-min, 5-min, 1h) para o backtest principal | Define granularidade, volume de dados e performance do engine | A definir |
-| Formato do dataset exportado (CSV vs Parquet) e campos disponíveis do MetaTrader 5 | Afeta ingestão, performance e compatibilidade | A definir |
+| Fonte primária de OHLCV (MT5 vs KuCoin Spot/Futures), pares e período | Define pipeline de coleta e volume de dados | A definir |
+| Schema do banco de OHLCV (campos, tipos, particionamento e índices) | Afeta ingestão, performance e compatibilidade | A definir |
 | Conjunto mínimo de features para observation e representação de sentimento | Base da interface com o agente e comparabilidade de experimentos | A definir |
 | Política de slippage e fee (fixo, percentual, spread) | Impacta métricas e realismo do backtest | A definir |
 | Definição final do vetor observation (campos, ordem, tipos, normalização) | Contrato entre Rust e Python; risco de retrabalho | A definir |
@@ -294,6 +298,7 @@ Baseado no Plano de Trabalho da IC “Agentes de Deep Reinforcement Learning no 
 
 - O MVP é **single-asset**, **long-only** e **bar-based**.
 - Integração com agente via **HTTP/JSON** no MVP.
+- OHLCV é armazenado e consultado via **PostgreSQL** (obrigatório).
 - Dados históricos e de sentimento são fornecidos pelo pesquisador (dataset externo).
 - Não há execução com dinheiro real no MVP.
 - O alvo principal é ambiente **Linux/Windows**.
@@ -301,22 +306,45 @@ Baseado no Plano de Trabalho da IC “Agentes de Deep Reinforcement Learning no 
 
 ## 15. Dependências e integrações
 
-- Fonte de dados OHLCV: arquivos CSV exportados (ex.: MetaTrader 5).
+- Fonte de dados OHLCV: coleta via API (ex.: KuCoin) com ingestão obrigatória em PostgreSQL.
+- Banco de dados: PostgreSQL (obrigatório no MVP).
 - Fonte de dados de sentimento: arquivos CSV/JSON agregados por janela.
 - Serviço Python de inferência do agente (HTTP local).
 - Configuração central via arquivo TOML.
 
 ## 16. Dados e formatos
 
-### 16.1 Formato OHLCV (CSV)
+### 16.1 Formato OHLCV (PostgreSQL)
 
-Campos obrigatórios: `timestamp_utc`, `open`, `high`, `low`, `close`, `volume`.
+Tabela recomendada: `ohlcv_candles`.
+
+Campos obrigatórios:
+
+- `exchange` (text)
+- `market` (text) — `spot` | `futures`
+- `symbol` (text)
+- `timeframe` (text)
+- `timestamp_utc` (timestamptz, sempre em UTC)
+- `open` (double precision)
+- `high` (double precision)
+- `low` (double precision)
+- `close` (double precision)
+- `volume` (double precision)
+- `turnover` (double precision, opcional)
+- `source` (text, ex.: `kucoin`, `mt5`)
+- `ingested_at` (timestamptz, default `now()`)
 
 Restrições e convenções (MVP):
 
-- `timestamp_utc` em UTC (RFC3339 recomendado; suportar formatos comuns de exportação quando possível).
-- Ordem crescente por timestamp (obrigatória).
-- Linhas sem `close` ou com valores não numéricos: invalidar (erro) ou descartar com warning (conforme modo/config).
+- Chave única: `(exchange, market, symbol, timeframe, timestamp_utc)`.
+- Ordenação por `timestamp_utc` deve ser estrita no consumo do backtest.
+- Registros com `close` inválido: descartar com warning.
+- Timestamps sempre convertidos para UTC antes de inserir.
+
+Índices sugeridos:
+
+- `UNIQUE(exchange, market, symbol, timeframe, timestamp_utc)`.
+- `INDEX(symbol, timeframe, timestamp_utc)`.
 
 ### 16.2 Formato de sentimento (CSV/JSON)
 
@@ -333,6 +361,32 @@ Restrições e convenções (MVP):
 - Alinhamento sentimento->barra usando `sentiment_lag`.
 - Relatório de gaps e duplicatas.
 
+### 16.4 Fonte OHLCV (KuCoin)
+
+**Spot REST (histórico):**
+
+- Endpoint: `GET /api/v1/market/candles` (base Spot).
+- Parâmetros: `symbol`, `type`, `startAt`, `endAt` (epoch em segundos).
+- Timeframes suportados: `1min`, `3min`, `5min`, `15min`, `30min`, `1hour`, `2hour`, `4hour`, `6hour`, `8hour`, `12hour`, `1day`, `1week`, `1month`.
+- Limite por chamada: até 1500 candles; paginar por janela de tempo.
+- Resposta: `time`, `open`, `close`, `high`, `low`, `volume`, `turnover`.
+
+**Futures REST (opcional, se usado no MVP futuro):**
+
+- Endpoint: `GET https://api-futures.kucoin.com/api/v1/kline/query`.
+- A documentação mostra uso de `symbol`, `granularity`, `from`, `to` (epoch em milissegundos) no exemplo.
+- Limite por chamada: até 500 candles; paginar por janela de tempo.
+
+**Qualidade de dados:**
+
+- Candles podem estar incompletos quando não há trades no intervalo; tratar como gap.
+- Para dados em tempo real, preferir WebSocket; para histórico, usar REST com paginação.
+
+**Observação operacional:**
+
+- Klines (spot/futures) usam peso 3 no pool público; respeitar o rate limit e aplicar backoff em caso de 429.
+- Persistir via upsert na tabela `ohlcv_candles` para garantir idempotência.
+
 ## 17. Critérios de aceitação por módulo
 
 ### 17.1 CLI
@@ -342,7 +396,8 @@ Restrições e convenções (MVP):
 
 ### 17.2 Data
 
-- Carrega arquivos OHLCV e sentimento sem erro.
+- Ingere OHLCV no PostgreSQL e consulta para backtest sem erro.
+- Carrega sentimento sem erro.
 - Emite relatório de qualidade de dados (gaps, duplicatas, ordenação).
 
 ### 17.3 Features
@@ -387,7 +442,7 @@ Restrições e convenções (MVP):
 ## 20. Testes e validação
 
 - Testes unitários para métricas (Lucro, Sharpe, Max Drawdown).
-- Testes de integração para ingestão de CSV/JSON.
+- Testes de integração para ingestão em PostgreSQL e leitura de sentimento (CSV/JSON).
 - Teste de fumaça do CLI (`backtest` e `paper` com dataset mínimo).
 
 ## 21. Glossário
@@ -660,8 +715,11 @@ symbol = "BTCUSD"
 timeframe = "1m"
 initial_capital = 10000.0
 
+[db]
+url = "postgres://kairos:secret@localhost:5432/kairos"
+ohlcv_table = "ohlcv_candles"
+
 [paths]
-ohlcv_csv = "data/btcusd_1m.csv"
 sentiment_path = "data/sentiment.csv"
 out_dir = "runs/"
 

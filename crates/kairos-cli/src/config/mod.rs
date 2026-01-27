@@ -5,11 +5,18 @@ use std::path::Path;
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub run: RunConfig,
+    pub db: DbConfig,
     pub paths: PathsConfig,
     pub costs: CostsConfig,
     pub risk: RiskConfig,
+    pub orders: Option<OrdersConfig>,
     pub features: FeaturesConfig,
     pub agent: AgentConfig,
+    pub strategy: Option<StrategyConfig>,
+    pub metrics: Option<MetricsConfig>,
+    pub data_quality: Option<DataQualityConfig>,
+    pub paper: Option<PaperConfig>,
+    pub report: Option<ReportConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -21,8 +28,15 @@ pub struct RunConfig {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct DbConfig {
+    pub url: String,
+    pub ohlcv_table: String,
+    pub exchange: String,
+    pub market: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct PathsConfig {
-    pub ohlcv_csv: String,
     pub sentiment_path: Option<String>,
     pub out_dir: String,
 }
@@ -41,11 +55,18 @@ pub struct RiskConfig {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct OrdersConfig {
+    pub size_mode: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct FeaturesConfig {
     pub return_mode: String,
     pub sma_windows: Vec<u64>,
+    pub volatility_windows: Option<Vec<u64>>,
     pub rsi_enabled: bool,
     pub sentiment_lag: String,
+    pub sentiment_missing: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,6 +78,36 @@ pub struct AgentConfig {
     pub fallback_action: String,
     pub api_version: String,
     pub feature_version: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StrategyConfig {
+    pub baseline: String,
+    pub sma_short: Option<u64>,
+    pub sma_long: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MetricsConfig {
+    pub risk_free_rate: Option<f64>,
+    pub annualization_factor: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DataQualityConfig {
+    pub max_gaps: Option<usize>,
+    pub max_duplicates: Option<usize>,
+    pub max_out_of_order: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PaperConfig {
+    pub replay_scale: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReportConfig {
+    pub html: Option<bool>,
 }
 
 pub fn load_config(path: &Path) -> Result<Config, String> {
@@ -84,8 +135,13 @@ symbol = "BTCUSD"
 timeframe = "1m"
 initial_capital = 10000.0
 
+[db]
+url = "postgres://kairos:secret@localhost:5432/kairos"
+ohlcv_table = "ohlcv_candles"
+exchange = "kucoin"
+market = "spot"
+
 [paths]
-ohlcv_csv = "data/btcusd_1m.csv"
 sentiment_path = "data/sentiment.csv"
 out_dir = "runs/"
 
@@ -112,6 +168,14 @@ retries = 1
 fallback_action = "HOLD"
 api_version = "v1"
 feature_version = "v1"
+
+[data_quality]
+max_gaps = 0
+max_duplicates = 0
+max_out_of_order = 0
+
+[paper]
+replay_scale = 60
 "#;
 
         let config = parse_config(toml_str);

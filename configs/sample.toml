@@ -1,12 +1,16 @@
 [run]
-run_id = "btc_1m_2024q1"
-symbol = "BTCUSD"
-timeframe = "1m"
+run_id = "btc_usdt_1min_2024q1"
+symbol = "BTC-USDT"
+timeframe = "1min"
 initial_capital = 10000.0
 
+[db]
+url = "postgres://kairos:secret@db:5432/kairos"
+ohlcv_table = "ohlcv_candles"
+exchange = "kucoin"
+market = "spot"
+
 [paths]
-ohlcv_csv = "data/btcusd_1m.csv"
-sentiment_path = "data/sentiment.csv"
 out_dir = "runs/"
 
 [costs]
@@ -18,17 +22,44 @@ max_position_qty = 1.0
 max_drawdown_pct = 0.30
 max_exposure_pct = 1.00
 
+[orders]
+# "qty" | "pct_equity"
+size_mode = "qty"
+
 [features]
 return_mode = "log"
 sma_windows = [10, 50]
+volatility_windows = [10]
 rsi_enabled = false
 sentiment_lag = "5m"
+# "error" | "zero_fill" | "forward_fill" | "drop_row"
+sentiment_missing = "error"
+
+[strategy]
+baseline = "buy_and_hold"
+sma_short = 10
+sma_long = 50
+
+[metrics]
+risk_free_rate = 0.0
+annualization_factor = 365.0
 
 [agent]
-mode = "remote"
+mode = "baseline"
 url = "http://127.0.0.1:8000"
 timeout_ms = 200
 retries = 1
 fallback_action = "HOLD"
 api_version = "v1"
 feature_version = "v1"
+
+[data_quality]
+max_gaps = 0
+max_duplicates = 0
+max_out_of_order = 0
+
+[paper]
+replay_scale = 60
+
+[report]
+html = false

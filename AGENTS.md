@@ -4,6 +4,8 @@
 - Root-level docs capture the product and delivery scope: `README.md`, `PRD.md`, `STARTUP_PLAN.md`, and `Kairos_Alloy_PRD_MVP_v0_2.pdf`.
 - Container tooling lives at `Dockerfile` and `docker/entrypoint.sh` (copies Codex config into the container on startup).
 - Devcontainer settings are in `.devcontainer/devcontainer.json` for VS Code/Antigravity workflows.
+- Rust workspace lives under `crates/` (CLI, core, and ingestion tools).
+- Database migrations live under `migrations/`.
 - There is no application source tree yet. If you add code, introduce a clear top-level layout (for example `src/`, `tests/`, `configs/`) and update this guide.
 
 ## Build, Test, and Development Commands
@@ -54,6 +56,7 @@ Use the Docker-based environment described in `README.md`:
 - Prefer small, focused commits; avoid mixing refactors with behavior changes, and include scope when helpful (e.g., `feat(engine): ...`).
 - PRs should include a concise description, linked issues/PRD references, and explicit validation steps (commands and results).
 - Add screenshots/log excerpts for CLI output or UX changes, and call out breaking changes or follow-ups.
+- For every significant implementation, create a dedicated branch for the work and use agents to complete required tasks. When finished and tests pass, merge into `main`.
 
 ## Documentation & Specs
 - Treat `PRD.md` as the source of truth for MVP requirements and CLI behavior. Update it if implementation details change.

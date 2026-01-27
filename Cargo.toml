@@ -2,5 +2,6 @@
 members = [
   "crates/kairos-core",
   "crates/kairos-cli",
+  "crates/kairos-ingest",
 ]
 resolver = "2"

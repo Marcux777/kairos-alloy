@@ -1,7 +1,8 @@
 # Rust
 /target/
 **/*.rs.bk
-Cargo.lock
+**/runs/
+runs/
 
 # Python
 __pycache__/
@@ -17,3 +18,6 @@ venv/
 .vscode/
 *:Zone.Identifier
 .serena/
+*.log
+.env.*
+!.env.example

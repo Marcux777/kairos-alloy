@@ -2,6 +2,7 @@ use crate::types::{Action, ActionType};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use std::time::Duration;
+use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -24,13 +25,27 @@ pub struct ActionRequest {
     pub portfolio_state: PortfolioState,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ActionResponse {
     pub action_type: String,
     pub size: f64,
     pub confidence: Option<f64>,
     pub model_version: Option<String>,
     pub latency_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentCallInfo {
+    pub attempts: u32,
+    pub duration_ms: u64,
+    pub status: Option<u16>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentCallResult {
+    pub info: AgentCallInfo,
+    pub response: Option<ActionResponse>,
 }
 
 pub struct AgentClient {
@@ -40,6 +55,7 @@ pub struct AgentClient {
     pub feature_version: String,
     pub retries: u32,
     pub fallback_action: ActionType,
+    client: Client,
 }
 
 impl AgentClient {
@@ -51,6 +67,10 @@ impl AgentClient {
         retries: u32,
         fallback_action: ActionType,
     ) -> Self {
+        let client = Client::builder()
+            .timeout(Duration::from_millis(timeout_ms))
+            .build()
+            .expect("failed to build http client");
         Self {
             url,
             timeout_ms,
@@ -58,45 +78,89 @@ impl AgentClient {
             feature_version,
             retries,
             fallback_action,
+            client,
         }
     }
 
     pub fn act(&self, request: &ActionRequest) -> Result<ActionResponse, String> {
-        let client = Client::builder()
-            .timeout(Duration::from_millis(self.timeout_ms))
-            .build()
-            .map_err(|err| format!("failed to build http client: {}", err))?;
+        let result = self.act_detailed(request);
+        match result.response {
+            Some(response) => Ok(response),
+            None => Err(result
+                .info
+                .error
+                .unwrap_or_else(|| "agent request failed".to_string())),
+        }
+    }
 
+    pub fn act_detailed(&self, request: &ActionRequest) -> AgentCallResult {
         let endpoint = format!("{}/v1/act", self.url.trim_end_matches('/'));
-        let mut attempts = 0;
+        let start = Instant::now();
+        let mut attempts = 0u32;
+        let mut last_status: Option<u16> = None;
+        let mut last_error: Option<String> = None;
+
         while attempts <= self.retries {
             attempts += 1;
-            let response = client.post(&endpoint).json(request).send();
+            let response = self.client.post(&endpoint).json(request).send();
             match response {
                 Ok(resp) => {
+                    last_status = Some(resp.status().as_u16());
                     if resp.status() == StatusCode::OK {
-                        return resp
-                            .json::<ActionResponse>()
-                            .map_err(|err| format!("failed to parse agent response: {}", err));
+                        match resp.json::<ActionResponse>() {
+                            Ok(parsed) => match validate_action_response(&parsed) {
+                                Ok(()) => {
+                                    return AgentCallResult {
+                                        info: AgentCallInfo {
+                                            attempts,
+                                            duration_ms: start.elapsed().as_millis() as u64,
+                                            status: last_status,
+                                            error: None,
+                                        },
+                                        response: Some(parsed),
+                                    };
+                                }
+                                Err(err) => {
+                                    last_error = Some(err);
+                                    break;
+                                }
+                            },
+                            Err(err) => {
+                                last_error =
+                                    Some(format!("failed to parse agent response: {}", err));
+                                break;
+                            }
+                        }
                     }
+
                     if resp.status().is_server_error() && attempts <= self.retries {
                         continue;
                     }
-                    return Err(format!(
+                    last_error = Some(format!(
                         "agent http error: status {}",
                         resp.status().as_u16()
                     ));
+                    break;
                 }
                 Err(err) => {
+                    last_error = Some(format!("agent request failed: {}", err));
                     if attempts <= self.retries {
                         continue;
                     }
-                    return Err(format!("agent request failed: {}", err));
+                    break;
                 }
             }
         }
 
-        Err("agent request failed after retries".to_string())
+        AgentCallResult {
+            info: AgentCallInfo {
+                attempts,
+                duration_ms: start.elapsed().as_millis() as u64,
+                status: last_status,
+                error: last_error.or_else(|| Some("agent request failed after retries".to_string())),
+            },
+            response: None,
+        }
     }
 
     pub fn to_action(response: &ActionResponse) -> Action {
@@ -127,6 +191,26 @@ impl AgentClient {
             latency_ms: None,
         }
     }
+}
+
+fn validate_action_response(response: &ActionResponse) -> Result<(), String> {
+    let action_type = response.action_type.to_uppercase();
+    if action_type != "BUY" && action_type != "SELL" && action_type != "HOLD" {
+        return Err(format!("invalid action_type: {}", response.action_type));
+    }
+    if !response.size.is_finite() || response.size < 0.0 {
+        return Err(format!("invalid size: {}", response.size));
+    }
+    if let Some(confidence) = response.confidence {
+        if !confidence.is_finite() || confidence < 0.0 || confidence > 1.0 {
+            return Err(format!("invalid confidence: {}", confidence));
+        }
+    }
+    if let Some(latency_ms) = response.latency_ms {
+        // no-op: u64 already non-negative.
+        let _ = latency_ms;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

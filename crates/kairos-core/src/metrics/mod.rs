@@ -10,15 +10,41 @@ pub struct MetricsSummary {
     pub max_drawdown: f64,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct MetricsConfig {
+    pub risk_free_rate: f64,
+    pub annualization_factor: Option<f64>,
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            risk_free_rate: 0.0,
+            annualization_factor: None,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct MetricsState {
     equity_curve: Vec<EquityPoint>,
     trades: Vec<Trade>,
     peak_equity: f64,
     max_drawdown: f64,
+    config: MetricsConfig,
 }
 
 impl MetricsState {
+    pub fn new(config: MetricsConfig) -> Self {
+        Self {
+            equity_curve: Vec::new(),
+            trades: Vec::new(),
+            peak_equity: 0.0,
+            max_drawdown: 0.0,
+            config,
+        }
+    }
+
     pub fn record_equity(&mut self, point: EquityPoint) {
         if self.peak_equity == 0.0 || point.equity > self.peak_equity {
             self.peak_equity = point.equity;
@@ -39,11 +65,12 @@ impl MetricsState {
         let trades = self.trades.len();
         let net_profit = self.net_profit();
         let sharpe = self.sharpe_ratio();
+        let win_rate = self.win_rate();
 
         MetricsSummary {
             bars_processed: self.equity_curve.len(),
             trades,
-            win_rate: 0.0,
+            win_rate,
             net_profit,
             sharpe,
             max_drawdown: self.max_drawdown,
@@ -86,7 +113,8 @@ impl MetricsState {
             let prev = pair[0].equity;
             let curr = pair[1].equity;
             if prev > 0.0 {
-                returns.push(curr / prev - 1.0);
+                let ret = curr / prev - 1.0;
+                returns.push(ret - self.config.risk_free_rate);
             }
         }
 
@@ -108,19 +136,47 @@ impl MetricsState {
         if std == 0.0 {
             0.0
         } else {
-            mean / std * (returns.len() as f64).sqrt()
+            let scale = self
+                .config
+                .annualization_factor
+                .unwrap_or(returns.len() as f64);
+            mean / std * scale.sqrt()
+        }
+    }
+
+    fn win_rate(&self) -> f64 {
+        if self.equity_curve.len() < 2 {
+            return 0.0;
+        }
+        let mut wins = 0usize;
+        let mut total = 0usize;
+        for pair in self.equity_curve.windows(2) {
+            let prev = pair[0].equity;
+            let curr = pair[1].equity;
+            if prev <= 0.0 {
+                continue;
+            }
+            total += 1;
+            if curr > prev {
+                wins += 1;
+            }
+        }
+        if total == 0 {
+            0.0
+        } else {
+            wins as f64 / total as f64
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::MetricsState;
+    use super::{MetricsConfig, MetricsState};
     use crate::types::EquityPoint;
 
     #[test]
     fn computes_net_profit_and_drawdown() {
-        let mut metrics = MetricsState::default();
+        let mut metrics = MetricsState::new(MetricsConfig::default());
         metrics.record_equity(EquityPoint {
             timestamp: 1,
             equity: 100.0,

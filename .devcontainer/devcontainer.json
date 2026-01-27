@@ -1,11 +1,12 @@
 {
   "name": "Kairos Alloy Dev",
-  "build": {
-    "dockerfile": "../Dockerfile"
-  },
+  "dockerComposeFile": ["../docker-compose.yml"],
+  "service": "dev",
   "workspaceFolder": "/workspaces/kairos-alloy",
   "mounts": [
     "source=${localEnv:HOME}/.codex,target=/codex-config,type=bind,consistency=cached"
   ],
+  "forwardPorts": [5432],
+  "shutdownAction": "stopCompose",
   "remoteUser": "root"
 }

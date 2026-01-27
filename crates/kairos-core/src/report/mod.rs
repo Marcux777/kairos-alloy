@@ -1,9 +1,32 @@
 use crate::metrics::MetricsSummary;
-use crate::types::{EquityPoint, Trade};
+use crate::metrics::{MetricsConfig, MetricsState};
+use crate::types::{EquityPoint, Side, Trade};
 use serde::Serialize;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditEvent {
+    pub run_id: String,
+    pub timestamp: i64,
+    pub stage: String,
+    pub action: String,
+    pub details: serde_json::Value,
+}
+
+pub fn write_audit_jsonl(path: &Path, events: &[AuditEvent]) -> Result<(), String> {
+    let mut file = fs::File::create(path)
+        .map_err(|err| format!("failed to create logs: {}", err))?;
+    for event in events {
+        let line = serde_json::to_string(event)
+            .map_err(|err| format!("failed to serialize audit event: {}", err))?;
+        file.write_all(line.as_bytes())
+            .and_then(|_| file.write_all(b"\n"))
+            .map_err(|err| format!("failed to write audit event: {}", err))?;
+    }
+    Ok(())
+}
 
 pub fn write_trades_csv(path: &Path, trades: &[Trade]) -> Result<(), String> {
     let mut output = String::from("timestamp_utc,symbol,side,qty,price,fee,slippage,strategy_id,reason\n");
@@ -40,9 +63,69 @@ pub fn write_equity_csv(path: &Path, points: &[EquityPoint]) -> Result<(), Strin
     fs::write(path, output).map_err(|err| format!("failed to write equity: {}", err))
 }
 
-pub fn write_summary_json(path: &Path, summary: &MetricsSummary) -> Result<(), String> {
-    let json = format!(
-        "{{\n  \"bars_processed\": {},\n  \"trades\": {},\n  \"win_rate\": {},\n  \"net_profit\": {},\n  \"sharpe\": {},\n  \"max_drawdown\": {}\n}}\n",
+#[derive(Debug, Serialize)]
+pub struct SummaryMeta {
+    pub run_id: String,
+    pub symbol: String,
+    pub timeframe: String,
+    pub start: i64,
+    pub end: i64,
+}
+
+pub fn write_summary_json(
+    path: &Path,
+    summary: &MetricsSummary,
+    meta: Option<&SummaryMeta>,
+) -> Result<(), String> {
+    let meta_json = meta.map(|meta| {
+        serde_json::json!({
+            "run_id": meta.run_id,
+            "symbol": meta.symbol,
+            "timeframe": meta.timeframe,
+            "start": meta.start,
+            "end": meta.end,
+        })
+    });
+
+    let json = serde_json::json!({
+        "meta": meta_json,
+        "bars_processed": summary.bars_processed,
+        "trades": summary.trades,
+        "win_rate": summary.win_rate,
+        "net_profit": summary.net_profit,
+        "sharpe": summary.sharpe,
+        "max_drawdown": summary.max_drawdown,
+    });
+    let json = serde_json::to_string_pretty(&json)
+        .map_err(|err| format!("failed to serialize summary: {}", err))?;
+    let mut file = fs::File::create(path)
+        .map_err(|err| format!("failed to create summary: {}", err))?;
+    file.write_all(json.as_bytes())
+        .map_err(|err| format!("failed to write summary: {}", err))
+}
+
+pub fn write_summary_html(
+    path: &Path,
+    summary: &MetricsSummary,
+    meta: Option<&SummaryMeta>,
+) -> Result<(), String> {
+    let (run_id, symbol, timeframe, start, end) = match meta {
+        Some(meta) => (
+            meta.run_id.as_str(),
+            meta.symbol.as_str(),
+            meta.timeframe.as_str(),
+            meta.start.to_string(),
+            meta.end.to_string(),
+        ),
+        None => ("unknown", "unknown", "unknown", "n/a".to_string(), "n/a".to_string()),
+    };
+    let html = format!(
+        "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\"/>\n  <title>Kairos Alloy Summary</title>\n  <style>\n    body {{ font-family: Arial, sans-serif; margin: 24px; }}\n    table {{ border-collapse: collapse; }}\n    td, th {{ border: 1px solid #ddd; padding: 8px; }}\n    th {{ text-align: left; }}\n  </style>\n</head>\n<body>\n  <h1>Kairos Alloy Summary</h1>\n  <h2>Run</h2>\n  <table>\n    <tr><th>run_id</th><td>{}</td></tr>\n    <tr><th>symbol</th><td>{}</td></tr>\n    <tr><th>timeframe</th><td>{}</td></tr>\n    <tr><th>start</th><td>{}</td></tr>\n    <tr><th>end</th><td>{}</td></tr>\n  </table>\n  <h2>Metrics</h2>\n  <table>\n    <tr><th>bars_processed</th><td>{}</td></tr>\n    <tr><th>trades</th><td>{}</td></tr>\n    <tr><th>win_rate</th><td>{:.4}</td></tr>\n    <tr><th>net_profit</th><td>{:.4}</td></tr>\n    <tr><th>sharpe</th><td>{:.4}</td></tr>\n    <tr><th>max_drawdown</th><td>{:.4}</td></tr>\n  </table>\n</body>\n</html>\n",
+        run_id,
+        symbol,
+        timeframe,
+        start,
+        end,
         summary.bars_processed,
         summary.trades,
         summary.win_rate,
@@ -50,19 +133,87 @@ pub fn write_summary_json(path: &Path, summary: &MetricsSummary) -> Result<(), S
         summary.sharpe,
         summary.max_drawdown
     );
-    let mut file = fs::File::create(path)
-        .map_err(|err| format!("failed to create summary: {}", err))?;
-    file.write_all(json.as_bytes())
-        .map_err(|err| format!("failed to write summary: {}", err))
+    fs::write(path, html).map_err(|err| format!("failed to write summary html: {}", err))
 }
 
-#[derive(Debug, Serialize)]
-struct LogEntry {
-    run_id: String,
-    timestamp: i64,
-    stage: String,
-    action: String,
-    details: serde_json::Value,
+#[derive(Debug, serde::Deserialize)]
+struct TradeRecord {
+    timestamp_utc: i64,
+    symbol: String,
+    side: String,
+    qty: f64,
+    price: f64,
+    fee: f64,
+    slippage: f64,
+    strategy_id: String,
+    reason: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct EquityRecord {
+    timestamp_utc: i64,
+    equity: f64,
+    cash: f64,
+    position_qty: f64,
+    unrealized_pnl: f64,
+    realized_pnl: f64,
+}
+
+pub fn read_trades_csv(path: &Path) -> Result<Vec<Trade>, String> {
+    let file = fs::File::open(path)
+        .map_err(|err| format!("failed to open trades csv {}: {}", path.display(), err))?;
+    let mut reader = csv::Reader::from_reader(file);
+    let mut trades = Vec::new();
+    for result in reader.deserialize::<TradeRecord>() {
+        let record = result.map_err(|err| format!("failed to parse trades row: {}", err))?;
+        let side = match record.side.to_uppercase().as_str() {
+            "BUY" => Side::Buy,
+            "SELL" => Side::Sell,
+            _ => return Err(format!("invalid side value: {}", record.side)),
+        };
+        trades.push(Trade {
+            timestamp: record.timestamp_utc,
+            symbol: record.symbol,
+            side,
+            quantity: record.qty,
+            price: record.price,
+            fee: record.fee,
+            slippage: record.slippage,
+            strategy_id: record.strategy_id,
+            reason: record.reason,
+        });
+    }
+    Ok(trades)
+}
+
+pub fn read_equity_csv(path: &Path) -> Result<Vec<EquityPoint>, String> {
+    let file = fs::File::open(path)
+        .map_err(|err| format!("failed to open equity csv {}: {}", path.display(), err))?;
+    let mut reader = csv::Reader::from_reader(file);
+    let mut points = Vec::new();
+    for result in reader.deserialize::<EquityRecord>() {
+        let record = result.map_err(|err| format!("failed to parse equity row: {}", err))?;
+        points.push(EquityPoint {
+            timestamp: record.timestamp_utc,
+            equity: record.equity,
+            cash: record.cash,
+            position_qty: record.position_qty,
+            unrealized_pnl: record.unrealized_pnl,
+            realized_pnl: record.realized_pnl,
+        });
+    }
+    Ok(points)
+}
+
+pub fn recompute_summary(trades: &[Trade], equity: &[EquityPoint]) -> MetricsSummary {
+    let mut state = MetricsState::new(MetricsConfig::default());
+    for point in equity {
+        state.record_equity(point.clone());
+    }
+    for trade in trades {
+        state.record_trade(trade.clone());
+    }
+    state.summary()
 }
 
 pub fn write_logs_jsonl(
@@ -71,11 +222,10 @@ pub fn write_logs_jsonl(
     trades: &[Trade],
     summary: &MetricsSummary,
 ) -> Result<(), String> {
-    let mut file = fs::File::create(path)
-        .map_err(|err| format!("failed to create logs: {}", err))?;
+    let mut events = Vec::with_capacity(trades.len() + 1);
 
     for trade in trades {
-        let entry = LogEntry {
+        events.push(AuditEvent {
             run_id: run_id.to_string(),
             timestamp: trade.timestamp,
             stage: "trade".to_string(),
@@ -89,15 +239,10 @@ pub fn write_logs_jsonl(
                 "strategy_id": trade.strategy_id,
                 "reason": trade.reason,
             }),
-        };
-        let line = serde_json::to_string(&entry)
-            .map_err(|err| format!("failed to serialize log entry: {}", err))?;
-        file.write_all(line.as_bytes())
-            .and_then(|_| file.write_all(b"\n"))
-            .map_err(|err| format!("failed to write log entry: {}", err))?;
+        });
     }
 
-    let summary_entry = LogEntry {
+    events.push(AuditEvent {
         run_id: run_id.to_string(),
         timestamp: 0,
         stage: "summary".to_string(),
@@ -109,14 +254,9 @@ pub fn write_logs_jsonl(
             "sharpe": summary.sharpe,
             "max_drawdown": summary.max_drawdown,
         }),
-    };
-    let line = serde_json::to_string(&summary_entry)
-        .map_err(|err| format!("failed to serialize summary log: {}", err))?;
-    file.write_all(line.as_bytes())
-        .and_then(|_| file.write_all(b"\n"))
-        .map_err(|err| format!("failed to write summary log: {}", err))?;
+    });
 
-    Ok(())
+    write_audit_jsonl(path, &events)
 }
 
 #[cfg(test)]
@@ -162,7 +302,7 @@ mod tests {
 
         write_trades_csv(dir.join("trades.csv").as_path(), &trades).expect("trades");
         write_equity_csv(dir.join("equity.csv").as_path(), &equity).expect("equity");
-        write_summary_json(dir.join("summary.json").as_path(), &summary).expect("summary");
+        write_summary_json(dir.join("summary.json").as_path(), &summary, None).expect("summary");
         write_logs_jsonl(dir.join("logs.jsonl").as_path(), "run1", &trades, &summary)
             .expect("logs");
 

@@ -1,32 +1,41 @@
 # Architecture
 
 ## Overview
-Kairos Alloy is a Rust-first system organized as a workspace with two crates:
+Kairos Alloy is a Rust-first system organized as a workspace with three crates:
 
 - `kairos-core`: engine, data types, and backtest logic
 - `kairos-cli`: command-line interface that drives core workflows
+- `kairos-ingest`: data ingestion (KuCoin OHLCV → PostgreSQL) + DB migrations
 
 ## Crate Responsibilities
 
 ### kairos-core
 Core domain logic and engine boundaries.
 
-Planned modules:
-- `market_data`: market data types and loaders
+Modules:
+- `data`: OHLCV/sentiment loaders and alignment helpers
+- `features`: feature pipeline producing `observation[]`
+- `engine`: backtest runner + market data sources
 - `portfolio`: positions, balances, and accounting
-- `strategy`: strategy interfaces and execution hooks
-- `backtest`: backtest runner and orchestration
 - `risk`: risk controls and limits
-- `metrics`: performance metrics and reports
-- `types`: shared base types (bar, tick, order, fill, position)
+- `agents`: HTTP client + request/response types for the external agent
+- `strategy`: baseline strategies + agent-backed strategy
+- `metrics`: performance metrics (net profit, sharpe, max drawdown)
+- `report`: artifacts (CSV/JSON/HTML) and audit logs (JSONL)
+- `types`: shared base types (bar, tick, order, trade, equity point)
 
 ### kairos-cli
 Entry point for users to run backtests and manage configs.
 
-Planned modules:
+Modules:
 - `commands`: CLI subcommands and routing
 - `config`: config loading and validation
 - `output`: summaries and report formatting
+
+### kairos-ingest
+Ingests OHLCV from KuCoin and persists it in PostgreSQL.
+
+It also applies SQL migrations from `migrations/`.
 
 ## High-Level Flow
 1. CLI loads config

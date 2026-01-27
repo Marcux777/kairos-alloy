@@ -1,3 +1,3 @@
 # Scripts
 
-Place development or maintenance scripts here when needed.
+Development and maintenance scripts.

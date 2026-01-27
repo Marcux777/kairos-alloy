@@ -9,6 +9,7 @@ pub struct Observation {
 pub struct FeatureConfig {
     pub return_mode: ReturnMode,
     pub sma_windows: Vec<usize>,
+    pub volatility_windows: Vec<usize>,
     pub rsi_enabled: bool,
 }
 
@@ -48,6 +49,11 @@ impl FeatureBuilder {
         for window in &self.config.sma_windows {
             let sma = self.sma(*window).unwrap_or(0.0);
             values.push(sma);
+        }
+
+        for window in &self.config.volatility_windows {
+            let vol = self.volatility(*window).unwrap_or(0.0);
+            values.push(vol);
         }
 
         if self.config.rsi_enabled {
@@ -90,6 +96,40 @@ impl FeatureBuilder {
         let rs = gains / losses.max(1e-9);
         Some(100.0 - (100.0 / (1.0 + rs)))
     }
+
+    fn volatility(&self, window: usize) -> Option<f64> {
+        if window == 0 || self.prices.len() <= window {
+            return None;
+        }
+        let slice = &self.prices[self.prices.len() - window - 1..];
+        let mut returns = Vec::with_capacity(window);
+        for pair in slice.windows(2) {
+            let prev = pair[0];
+            let curr = pair[1];
+            if prev <= 0.0 {
+                returns.push(0.0);
+                continue;
+            }
+            let r = match self.config.return_mode {
+                ReturnMode::Log => (curr / prev).ln(),
+                ReturnMode::Pct => curr / prev - 1.0,
+            };
+            returns.push(r);
+        }
+        if returns.is_empty() {
+            return None;
+        }
+        let mean = returns.iter().sum::<f64>() / returns.len() as f64;
+        let var = returns
+            .iter()
+            .map(|ret| {
+                let diff = ret - mean;
+                diff * diff
+            })
+            .sum::<f64>()
+            / returns.len() as f64;
+        Some(var.sqrt())
+    }
 }
 
 #[cfg(test)]
@@ -114,6 +154,7 @@ mod tests {
         let mut builder = FeatureBuilder::new(FeatureConfig {
             return_mode: ReturnMode::Pct,
             sma_windows: vec![],
+            volatility_windows: vec![],
             rsi_enabled: false,
         });
         let obs = builder.update(&bar(100.0), None);
@@ -125,6 +166,7 @@ mod tests {
         let mut builder = FeatureBuilder::new(FeatureConfig {
             return_mode: ReturnMode::Pct,
             sma_windows: vec![2],
+            volatility_windows: vec![],
             rsi_enabled: false,
         });
         builder.update(&bar(10.0), None);
@@ -137,9 +179,25 @@ mod tests {
         let mut builder = FeatureBuilder::new(FeatureConfig {
             return_mode: ReturnMode::Pct,
             sma_windows: vec![],
+            volatility_windows: vec![],
             rsi_enabled: false,
         });
         let obs = builder.update(&bar(10.0), Some(&[0.1, 0.2]));
         assert_eq!(obs.values.len(), 3);
+    }
+
+    #[test]
+    fn computes_volatility() {
+        let mut builder = FeatureBuilder::new(FeatureConfig {
+            return_mode: ReturnMode::Pct,
+            sma_windows: vec![],
+            volatility_windows: vec![3],
+            rsi_enabled: false,
+        });
+        builder.update(&bar(10.0), None);
+        builder.update(&bar(11.0), None);
+        builder.update(&bar(9.0), None);
+        let obs = builder.update(&bar(10.0), None);
+        assert!(obs.values[1] >= 0.0);
     }
 }

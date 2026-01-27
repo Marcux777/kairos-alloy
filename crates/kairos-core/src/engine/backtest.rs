@@ -1,9 +1,17 @@
 use crate::market_data::MarketDataSource;
-use crate::metrics::{MetricsState, MetricsSummary};
+use crate::metrics::{MetricsConfig, MetricsState, MetricsSummary};
 use crate::portfolio::Portfolio;
+use crate::report::AuditEvent;
 use crate::risk::RiskLimits;
 use crate::strategy::Strategy;
 use crate::types::{ActionType, EquityPoint, Order, Side, Trade};
+use serde_json::json;
+
+#[derive(Debug, Clone, Copy)]
+pub enum OrderSizeMode {
+    Quantity,
+    PctEquity,
+}
 
 #[derive(Debug)]
 pub struct BacktestRunner<S, D>
@@ -11,6 +19,7 @@ where
     S: Strategy,
     D: MarketDataSource,
 {
+    run_id: String,
     strategy: S,
     data: D,
     portfolio: Portfolio,
@@ -22,12 +31,15 @@ where
     slippage_bps: f64,
     symbol: String,
     halt_trading: bool,
+    size_mode: OrderSizeMode,
+    audit_events: Vec<AuditEvent>,
 }
 
 pub struct BacktestResults {
     pub summary: MetricsSummary,
     pub trades: Vec<Trade>,
     pub equity: Vec<EquityPoint>,
+    pub audit_events: Vec<AuditEvent>,
 }
 
 impl<S, D> BacktestRunner<S, D>
@@ -36,30 +48,51 @@ where
     D: MarketDataSource,
 {
     pub fn new(
+        run_id: String,
         strategy: S,
         data: D,
         risk_limits: RiskLimits,
         initial_capital: f64,
+        metrics_config: MetricsConfig,
         fee_bps: f64,
         slippage_bps: f64,
         symbol: String,
+        size_mode: OrderSizeMode,
     ) -> Self {
         Self {
+            run_id,
             strategy,
             data,
             portfolio: Portfolio::new_with_cash(initial_capital),
             risk_limits,
-            metrics: MetricsState::default(),
+            metrics: MetricsState::new(metrics_config),
             pending_order: None,
             next_order_id: 1,
             fee_bps,
             slippage_bps,
             symbol,
             halt_trading: false,
+            size_mode,
+            audit_events: Vec::new(),
         }
     }
 
     pub fn run(&mut self) -> BacktestResults {
+        self.audit_events.push(AuditEvent {
+            run_id: self.run_id.clone(),
+            timestamp: 0,
+            stage: "engine".to_string(),
+            action: "start".to_string(),
+            details: json!({
+                "strategy": self.strategy.name(),
+                "symbol": self.symbol.clone(),
+                "size_mode": match self.size_mode {
+                    OrderSizeMode::Quantity => "qty",
+                    OrderSizeMode::PctEquity => "pct_equity",
+                }
+            }),
+        });
+
         while let Some(bar) = self.data.next_bar() {
             self.execute_pending_order(&bar);
 
@@ -73,11 +106,37 @@ where
             // Placeholder: extend with full risk/metrics/reporting.
         }
 
+        let mut strategy_events = self.strategy.drain_audit_events();
+        self.audit_events.append(&mut strategy_events);
+
         let (equity, trades, summary) = std::mem::take(&mut self.metrics).into_parts();
+        self.audit_events.push(AuditEvent {
+            run_id: self.run_id.clone(),
+            timestamp: 0,
+            stage: "engine".to_string(),
+            action: "complete".to_string(),
+            details: json!({
+                "bars_processed": summary.bars_processed,
+                "trades": summary.trades,
+                "net_profit": summary.net_profit,
+                "sharpe": summary.sharpe,
+                "max_drawdown": summary.max_drawdown,
+                "halt_trading": self.halt_trading,
+            }),
+        });
+
+        self.audit_events.sort_by(|a, b| {
+            a.timestamp
+                .cmp(&b.timestamp)
+                .then_with(|| a.stage.cmp(&b.stage))
+                .then_with(|| a.action.cmp(&b.action))
+        });
+
         BacktestResults {
             summary,
             trades,
             equity,
+            audit_events: std::mem::take(&mut self.audit_events),
         }
     }
 
@@ -113,48 +172,178 @@ where
             strategy_id: self.strategy.name().to_string(),
             reason: "strategy".to_string(),
         });
+
+        self.audit_events.push(AuditEvent {
+            run_id: self.run_id.clone(),
+            timestamp: bar.timestamp,
+            stage: "trade".to_string(),
+            action: format!("{:?}", order.side),
+            details: json!({
+                "symbol": self.symbol.clone(),
+                "qty": order.quantity,
+                "price": price,
+                "fee": fee,
+                "slippage": slippage_cost,
+                "order_id": order.id,
+                "strategy_id": self.strategy.name(),
+            }),
+        });
     }
 
     fn schedule_order(&mut self, bar: &crate::types::Bar, action: crate::types::Action) {
+        let requested_size = action.size;
+
         match action.action_type {
             ActionType::Hold => return,
             ActionType::Buy => {
                 if action.size <= 0.0 {
+                    self.audit_events.push(order_reject_event(
+                        &self.run_id,
+                        bar.timestamp,
+                        &self.symbol,
+                        self.strategy.name(),
+                        "non_positive_size",
+                        action.action_type,
+                        requested_size,
+                        self.size_mode,
+                    ));
                     return;
                 }
+                let qty = match self.resolve_quantity(bar, action.action_type, action.size) {
+                    Ok(qty) if qty > 0.0 => qty,
+                    Ok(_) => {
+                        self.audit_events.push(order_reject_event(
+                            &self.run_id,
+                            bar.timestamp,
+                            &self.symbol,
+                            self.strategy.name(),
+                            "resolved_qty_non_positive",
+                            action.action_type,
+                            requested_size,
+                            self.size_mode,
+                        ));
+                        return;
+                    }
+                    Err(reason) => {
+                        self.audit_events.push(order_reject_event(
+                            &self.run_id,
+                            bar.timestamp,
+                            &self.symbol,
+                            self.strategy.name(),
+                            &reason,
+                            action.action_type,
+                            requested_size,
+                            self.size_mode,
+                        ));
+                        return;
+                    }
+                };
                 if !self.risk_limits.allows_position(
                     self.portfolio.position_qty(&bar.symbol),
-                    action.size,
+                    qty,
                 ) {
+                    self.audit_events.push(order_reject_event(
+                        &self.run_id,
+                        bar.timestamp,
+                        &self.symbol,
+                        self.strategy.name(),
+                        "position_limit",
+                        action.action_type,
+                        requested_size,
+                        self.size_mode,
+                    ));
                     return;
                 }
                 let next_exposure =
-                    (self.portfolio.position_qty(&bar.symbol) + action.size) * bar.close;
+                    (self.portfolio.position_qty(&bar.symbol) + qty) * bar.close;
                 let equity = self.portfolio.equity(&bar.symbol, bar.close);
                 if !self
                     .risk_limits
                     .allows_exposure(equity, next_exposure)
                 {
+                    self.audit_events.push(order_reject_event(
+                        &self.run_id,
+                        bar.timestamp,
+                        &self.symbol,
+                        self.strategy.name(),
+                        "exposure_limit",
+                        action.action_type,
+                        requested_size,
+                        self.size_mode,
+                    ));
                     return;
                 }
                 self.pending_order = Some(Order {
                     id: self.next_order_id,
                     side: Side::Buy,
-                    quantity: action.size,
+                    quantity: qty,
                     limit_price: None,
                     timestamp: bar.timestamp,
                 });
                 self.next_order_id += 1;
+
+                self.audit_events.push(AuditEvent {
+                    run_id: self.run_id.clone(),
+                    timestamp: bar.timestamp,
+                    stage: "order".to_string(),
+                    action: "schedule".to_string(),
+                    details: json!({
+                        "side": "BUY",
+                        "requested_size": requested_size,
+                        "resolved_qty": qty,
+                        "size_mode": match self.size_mode {
+                            OrderSizeMode::Quantity => "qty",
+                            OrderSizeMode::PctEquity => "pct_equity",
+                        },
+                        "strategy_id": self.strategy.name(),
+                    }),
+                });
             }
             ActionType::Sell => {
                 if action.size <= 0.0 {
+                    self.audit_events.push(order_reject_event(
+                        &self.run_id,
+                        bar.timestamp,
+                        &self.symbol,
+                        self.strategy.name(),
+                        "non_positive_size",
+                        action.action_type,
+                        requested_size,
+                        self.size_mode,
+                    ));
                     return;
                 }
                 let available = self.portfolio.position_qty(&bar.symbol);
                 if available <= 0.0 {
+                    self.audit_events.push(order_reject_event(
+                        &self.run_id,
+                        bar.timestamp,
+                        &self.symbol,
+                        self.strategy.name(),
+                        "no_position",
+                        action.action_type,
+                        requested_size,
+                        self.size_mode,
+                    ));
                     return;
                 }
-                let qty = action.size.min(available);
+                let resolved = match self.resolve_quantity(bar, action.action_type, action.size) {
+                    Ok(qty) => qty,
+                    Err(reason) => {
+                        self.audit_events.push(order_reject_event(
+                            &self.run_id,
+                            bar.timestamp,
+                            &self.symbol,
+                            self.strategy.name(),
+                            &reason,
+                            action.action_type,
+                            requested_size,
+                            self.size_mode,
+                        ));
+                        return;
+                    }
+                };
+                let qty = resolved.min(available);
                 self.pending_order = Some(Order {
                     id: self.next_order_id,
                     side: Side::Sell,
@@ -163,6 +352,23 @@ where
                     timestamp: bar.timestamp,
                 });
                 self.next_order_id += 1;
+
+                self.audit_events.push(AuditEvent {
+                    run_id: self.run_id.clone(),
+                    timestamp: bar.timestamp,
+                    stage: "order".to_string(),
+                    action: "schedule".to_string(),
+                    details: json!({
+                        "side": "SELL",
+                        "requested_size": requested_size,
+                        "resolved_qty": qty,
+                        "size_mode": match self.size_mode {
+                            OrderSizeMode::Quantity => "qty",
+                            OrderSizeMode::PctEquity => "pct_equity",
+                        },
+                        "strategy_id": self.strategy.name(),
+                    }),
+                });
             }
         }
     }
@@ -183,8 +389,85 @@ where
 
         let drawdown = self.metrics.max_drawdown();
         if !self.risk_limits.allows_drawdown(drawdown) {
+            if !self.halt_trading {
+                self.audit_events.push(AuditEvent {
+                    run_id: self.run_id.clone(),
+                    timestamp: bar.timestamp,
+                    stage: "risk".to_string(),
+                    action: "halt_drawdown".to_string(),
+                    details: json!({
+                        "drawdown_pct": drawdown,
+                        "max_drawdown_pct": self.risk_limits.max_drawdown_pct,
+                    }),
+                });
+            }
             self.halt_trading = true;
         }
+    }
+
+    fn resolve_quantity(
+        &self,
+        bar: &crate::types::Bar,
+        action_type: ActionType,
+        size: f64,
+    ) -> Result<f64, String> {
+        if !size.is_finite() {
+            return Err("size_not_finite".to_string());
+        }
+        match self.size_mode {
+            OrderSizeMode::Quantity => Ok(size),
+            OrderSizeMode::PctEquity => {
+                if size < 0.0 || size > 1.0 {
+                    return Err("pct_out_of_range".to_string());
+                }
+                let equity = self.portfolio.equity(&bar.symbol, bar.close);
+                if equity <= 0.0 || !equity.is_finite() {
+                    return Err("equity_not_positive".to_string());
+                }
+                match action_type {
+                    ActionType::Buy => {
+                        if bar.close <= 0.0 || !bar.close.is_finite() {
+                            return Err("price_not_positive".to_string());
+                        }
+                        Ok((equity * size) / bar.close)
+                    }
+                    ActionType::Sell => {
+                        let available = self.portfolio.position_qty(&bar.symbol);
+                        Ok(available * size)
+                    }
+                    ActionType::Hold => Ok(0.0),
+                }
+            }
+        }
+    }
+}
+
+fn order_reject_event(
+    run_id: &str,
+    timestamp: i64,
+    symbol: &str,
+    strategy_id: &str,
+    reason: &str,
+    action_type: ActionType,
+    requested_size: f64,
+    size_mode: OrderSizeMode,
+) -> AuditEvent {
+    AuditEvent {
+        run_id: run_id.to_string(),
+        timestamp,
+        stage: "order".to_string(),
+        action: "reject".to_string(),
+        details: json!({
+            "symbol": symbol,
+            "strategy_id": strategy_id,
+            "reason": reason,
+            "action_type": format!("{:?}", action_type),
+            "requested_size": requested_size,
+            "size_mode": match size_mode {
+                OrderSizeMode::Quantity => "qty",
+                OrderSizeMode::PctEquity => "pct_equity",
+            }
+        }),
     }
 }
 
@@ -192,9 +475,11 @@ where
 mod tests {
     use super::BacktestRunner;
     use crate::market_data::MarketDataSource;
+    use crate::metrics::MetricsConfig;
     use crate::risk::RiskLimits;
     use crate::strategy::Strategy;
     use crate::types::Bar;
+    use super::OrderSizeMode;
 
     struct DummyDataSource {
         bars: Vec<Bar>,
@@ -253,13 +538,16 @@ mod tests {
         let data = DummyDataSource::new(bars);
         let strategy = DummyStrategy;
         let mut runner = BacktestRunner::new(
+            "run1".to_string(),
             strategy,
             data,
             RiskLimits::default(),
             1000.0,
+            MetricsConfig::default(),
             0.0,
             0.0,
             "BTCUSD".to_string(),
+            OrderSizeMode::Quantity,
         );
         let result = runner.run();
 

@@ -15,6 +15,21 @@ cargo build
 cargo run -p kairos-cli
 ```
 
+## Ingestao OHLCV (PostgreSQL)
+
+Migracao da tabela e ingestao de candles KuCoin:
+
+```bash
+cargo run -p kairos-ingest -- migrate --db-url postgres://kairos:secret@db:5432/kairos
+cargo run -p kairos-ingest -- ingest-kucoin \
+  --db-url postgres://kairos:secret@db:5432/kairos \
+  --symbol BTC-USDT \
+  --market spot \
+  --timeframe 1min \
+  --start 2024-01-01T00:00:00Z \
+  --end 2024-02-01T00:00:00Z
+```
+
 ## CLI (MVP)
 
 Exemplos:
@@ -28,13 +43,25 @@ cargo run -p kairos-cli -- report --input runs/<run_id>/
 
 ## Ambiente de construção (Docker)
 
+Subir o PostgreSQL (Docker separado):
+
+```bash
+docker compose up -d db
+```
+
 Build da imagem:
 
 ```bash
 docker build -t kairos-alloy-dev .
 ```
 
-Rodar com o workspace e configuração do Codex:
+Rodar o ambiente dev (app + db via docker compose):
+
+```bash
+docker compose run --rm dev
+```
+
+Rodar manualmente com o workspace e configuração do Codex (sem compose):
 
 ```bash
 docker run -it \
@@ -43,6 +70,10 @@ docker run -it \
   kairos-alloy-dev
 ```
 
+### PostgreSQL (padrão)
+
+Por padrão, o banco roda no serviço `db` do `docker-compose.yml` (host `db:5432` dentro do container) e também fica acessível no host em `localhost:5432`.
+
 ### Dev Containers (VS Code / Antigravity)
 
 Se você estiver no Windows usando WSL, o `devcontainer.json` já monta o Codex config a partir do caminho WSL:
@@ -50,3 +81,9 @@ Se você estiver no Windows usando WSL, o `devcontainer.json` já monta o Codex 
 - `\\wsl.localhost\\Ubuntu\\home\\marcux777\\.codex`
 
 Se o seu distro/usuário for diferente, ajuste o mount em `.devcontainer/devcontainer.json`.
+
+## Testes
+
+```bash
+cargo test -p kairos-ingest
+```

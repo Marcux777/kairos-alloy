@@ -2,8 +2,10 @@ use crate::agents::{ActionRequest, AgentClient, PortfolioState};
 use crate::data::sentiment::SentimentPoint;
 use crate::features::{FeatureBuilder, Observation};
 use crate::portfolio::Portfolio;
+use crate::report::AuditEvent;
 use crate::types::{Action, ActionType, Bar, Tick};
 use chrono::{DateTime, TimeZone, Utc};
+use serde_json::json;
 
 pub trait Strategy {
     fn name(&self) -> &str;
@@ -13,6 +15,10 @@ pub trait Strategy {
     }
 
     fn on_tick(&mut self, _tick: &Tick) {}
+
+    fn drain_audit_events(&mut self) -> Vec<AuditEvent> {
+        Vec::new()
+    }
 }
 
 pub struct BuyAndHold {
@@ -125,6 +131,7 @@ pub struct AgentStrategy {
     pub features: FeatureBuilder,
     pub sentiment: Vec<Option<SentimentPoint>>,
     index: usize,
+    audit_events: Vec<AuditEvent>,
 }
 
 impl AgentStrategy {
@@ -146,6 +153,7 @@ impl AgentStrategy {
             features,
             sentiment,
             index: 0,
+            audit_events: Vec::new(),
         }
     }
 
@@ -190,12 +198,56 @@ impl Strategy for AgentStrategy {
             .map(|point| point.values.as_slice());
         let observation = self.features.update(bar, sentiment_values);
         let request = self.build_request(bar, &observation, portfolio);
-        self.index += 1;
+        let result = self.agent.act_detailed(&request);
 
-        match self.agent.act(&request) {
-            Ok(response) => AgentClient::to_action(&response),
-            Err(_) => AgentClient::to_action(&self.agent.fallback_response()),
-        }
+        let (response, used_fallback) = match result.response {
+            Some(response) => (response, false),
+            None => (self.agent.fallback_response(), true),
+        };
+
+        let response_action_type = response.action_type.clone();
+        let response_size = response.size;
+        let confidence = response.confidence;
+        let model_version = response.model_version.clone();
+        let agent_latency_ms = response.latency_ms;
+
+        self.audit_events.push(AuditEvent {
+            run_id: self.run_id.clone(),
+            timestamp: bar.timestamp,
+            stage: "agent".to_string(),
+            action: if used_fallback {
+                "fallback".to_string()
+            } else {
+                "call".to_string()
+            },
+            details: json!({
+                "url": self.agent.url.clone(),
+                "attempts": result.info.attempts,
+                "duration_ms": result.info.duration_ms,
+                "status": result.info.status,
+                "error": result.info.error,
+                "used_fallback": used_fallback,
+                "agent_latency_ms": agent_latency_ms,
+                "model_version": model_version,
+                "confidence": confidence,
+                "response_action_type": response_action_type,
+                "response_size": response_size,
+                "portfolio_state": {
+                    "cash": portfolio.cash(),
+                    "position_qty": portfolio.position_qty(&bar.symbol),
+                    "position_avg_price": portfolio.position_avg_price(&bar.symbol),
+                    "equity": portfolio.equity(&bar.symbol, bar.close),
+                },
+                "observation_len": observation.values.len(),
+            }),
+        });
+
+        self.index += 1;
+        AgentClient::to_action(&response)
+    }
+
+    fn drain_audit_events(&mut self) -> Vec<AuditEvent> {
+        std::mem::take(&mut self.audit_events)
     }
 }
 
@@ -222,6 +274,15 @@ impl Strategy for StrategyKind {
             StrategyKind::SimpleSma(strategy) => strategy.on_bar(bar, portfolio),
             StrategyKind::Agent(strategy) => strategy.on_bar(bar, portfolio),
             StrategyKind::Hold(strategy) => strategy.on_bar(bar, portfolio),
+        }
+    }
+
+    fn drain_audit_events(&mut self) -> Vec<AuditEvent> {
+        match self {
+            StrategyKind::BuyAndHold(strategy) => strategy.drain_audit_events(),
+            StrategyKind::SimpleSma(strategy) => strategy.drain_audit_events(),
+            StrategyKind::Agent(strategy) => strategy.drain_audit_events(),
+            StrategyKind::Hold(strategy) => strategy.drain_audit_events(),
         }
     }
 }

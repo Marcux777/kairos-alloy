@@ -4,6 +4,14 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::Path;
 
+#[derive(Debug, Clone, Copy)]
+pub enum MissingValuePolicy {
+    Error,
+    ZeroFill,
+    ForwardFill,
+    DropRow,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SentimentPoint {
     pub timestamp: i64,
@@ -14,6 +22,14 @@ pub struct SentimentPoint {
 pub struct SentimentReport {
     pub duplicates: usize,
     pub out_of_order: usize,
+    pub missing_values: usize,
+    pub invalid_values: usize,
+    pub dropped_rows: usize,
+    pub first_timestamp: Option<i64>,
+    pub last_timestamp: Option<i64>,
+    pub first_duplicate: Option<i64>,
+    pub first_out_of_order: Option<i64>,
+    pub schema: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -24,11 +40,18 @@ struct SentimentJsonRecord {
 }
 
 pub fn load_csv(path: &Path) -> Result<(Vec<SentimentPoint>, SentimentReport), String> {
+    load_csv_with_policy(path, MissingValuePolicy::Error)
+}
+
+pub fn load_csv_with_policy(
+    path: &Path,
+    policy: MissingValuePolicy,
+) -> Result<(Vec<SentimentPoint>, SentimentReport), String> {
     let file = File::open(path)
         .map_err(|err| format!("failed to open sentiment CSV {}: {}", path.display(), err))?;
     let mut reader = csv::Reader::from_reader(file);
 
-    let mut points = Vec::new();
+    let mut raw_by_ts: BTreeMap<i64, Vec<Option<f64>>> = BTreeMap::new();
     let mut report = SentimentReport::default();
     let mut last_ts: Option<i64> = None;
 
@@ -36,6 +59,8 @@ pub fn load_csv(path: &Path) -> Result<(Vec<SentimentPoint>, SentimentReport), S
         .headers()
         .map_err(|err| format!("failed to read sentiment CSV headers: {}", err))?
         .clone();
+    report.schema = headers.iter().skip(1).map(|h| h.to_string()).collect();
+    let schema_len = report.schema.len();
 
     for result in reader.records() {
         let record = result.map_err(|err| format!("failed to parse sentiment CSV row: {}", err))?;
@@ -44,69 +69,193 @@ pub fn load_csv(path: &Path) -> Result<(Vec<SentimentPoint>, SentimentReport), S
             .ok_or_else(|| "missing timestamp_utc column".to_string())?;
         let timestamp = parse_timestamp(timestamp_str)?;
 
+        if report.first_timestamp.is_none() {
+            report.first_timestamp = Some(timestamp);
+        }
+
         if let Some(prev) = last_ts {
-            if timestamp == prev {
-                report.duplicates += 1;
-            } else if timestamp < prev {
+            if timestamp < prev {
                 report.out_of_order += 1;
+                if report.first_out_of_order.is_none() {
+                    report.first_out_of_order = Some(timestamp);
+                }
             }
         }
         last_ts = Some(timestamp);
+        report.last_timestamp = Some(timestamp);
 
-        let mut values = Vec::new();
-        for (idx, raw) in record.iter().enumerate() {
-            if idx == 0 {
+        let mut values: Vec<Option<f64>> = vec![None; schema_len];
+        for idx in 0..schema_len {
+            let raw = record.get(idx + 1).unwrap_or("");
+            if raw.trim().is_empty() {
+                report.missing_values += 1;
                 continue;
             }
-            if let Ok(value) = raw.parse::<f64>() {
-                values.push(value);
-            } else {
-                let column = headers.get(idx).unwrap_or("unknown");
-                return Err(format!(
-                    "invalid sentiment value '{}' in column {}",
-                    raw, column
-                ));
+            match raw.parse::<f64>() {
+                Ok(value) => values[idx] = Some(value),
+                Err(_) => {
+                    report.invalid_values += 1;
+                    let column = headers.get(idx + 1).unwrap_or("unknown");
+                    if matches!(policy, MissingValuePolicy::Error) {
+                        return Err(format!(
+                            "invalid sentiment value '{}' in column {}",
+                            raw, column
+                        ));
+                    }
+                }
             }
         }
 
-        points.push(SentimentPoint { timestamp, values });
+        if raw_by_ts.insert(timestamp, values).is_some() {
+            report.duplicates += 1;
+            if report.first_duplicate.is_none() {
+                report.first_duplicate = Some(timestamp);
+            }
+        }
+    }
+
+    let mut points = Vec::with_capacity(raw_by_ts.len());
+    let mut last_values: Vec<Option<f64>> = vec![None; schema_len];
+    for (timestamp, values) in raw_by_ts {
+        if values.iter().any(|v| v.is_none()) && matches!(policy, MissingValuePolicy::DropRow) {
+            report.dropped_rows += 1;
+            continue;
+        }
+        let mut resolved = Vec::with_capacity(schema_len);
+        for (idx, value) in values.into_iter().enumerate() {
+            let v = match value {
+                Some(v) => {
+                    last_values[idx] = Some(v);
+                    v
+                }
+                None => match policy {
+                    MissingValuePolicy::Error => {
+                        return Err(format!("missing sentiment value at ts={}", timestamp))
+                    }
+                    MissingValuePolicy::ZeroFill => 0.0,
+                    MissingValuePolicy::ForwardFill => last_values[idx].unwrap_or(0.0),
+                    MissingValuePolicy::DropRow => 0.0,
+                },
+            };
+            resolved.push(v);
+        }
+        points.push(SentimentPoint {
+            timestamp,
+            values: resolved,
+        });
     }
 
     Ok((points, report))
 }
 
 pub fn load_json(path: &Path) -> Result<(Vec<SentimentPoint>, SentimentReport), String> {
+    load_json_with_policy(path, MissingValuePolicy::Error)
+}
+
+pub fn load_json_with_policy(
+    path: &Path,
+    policy: MissingValuePolicy,
+) -> Result<(Vec<SentimentPoint>, SentimentReport), String> {
     let file = File::open(path)
         .map_err(|err| format!("failed to open sentiment JSON {}: {}", path.display(), err))?;
     let records: Vec<SentimentJsonRecord> = serde_json::from_reader(file)
         .map_err(|err| format!("failed to parse sentiment JSON: {}", err))?;
 
-    let mut points = Vec::new();
+    let mut raw_by_ts: BTreeMap<i64, BTreeMap<String, Option<f64>>> = BTreeMap::new();
+    let mut schema_set: BTreeMap<String, ()> = BTreeMap::new();
     let mut report = SentimentReport::default();
     let mut last_ts: Option<i64> = None;
 
     for record in records {
         let timestamp = parse_timestamp(&record.timestamp_utc)?;
 
-        if let Some(prev) = last_ts {
-            if timestamp == prev {
-                report.duplicates += 1;
-            } else if timestamp < prev {
-                report.out_of_order += 1;
-            }
+        if report.first_timestamp.is_none() {
+            report.first_timestamp = Some(timestamp);
         }
-        last_ts = Some(timestamp);
 
-        let mut values = Vec::new();
-        if let Some(obj) = record.values.as_object() {
-            for (_key, value) in obj.iter() {
-                if let Some(value) = value.as_f64() {
-                    values.push(value);
+        if let Some(prev) = last_ts {
+            if timestamp < prev {
+                report.out_of_order += 1;
+                if report.first_out_of_order.is_none() {
+                    report.first_out_of_order = Some(timestamp);
                 }
             }
         }
+        last_ts = Some(timestamp);
+        report.last_timestamp = Some(timestamp);
 
-        points.push(SentimentPoint { timestamp, values });
+        let mut row: BTreeMap<String, Option<f64>> = BTreeMap::new();
+        if let Some(obj) = record.values.as_object() {
+            for (key, value) in obj.iter() {
+                schema_set.insert(key.clone(), ());
+                let parsed = value.as_f64();
+                if parsed.is_none() {
+                    if value.is_null() {
+                        report.missing_values += 1;
+                    } else {
+                        report.invalid_values += 1;
+                        if matches!(policy, MissingValuePolicy::Error) {
+                            return Err(format!(
+                                "invalid sentiment json value for key '{}' at ts={}",
+                                key, timestamp
+                            ));
+                        }
+                    }
+                }
+                row.insert(key.clone(), parsed);
+            }
+        }
+
+        if raw_by_ts.insert(timestamp, row).is_some() {
+            report.duplicates += 1;
+            if report.first_duplicate.is_none() {
+                report.first_duplicate = Some(timestamp);
+            }
+        }
+    }
+
+    report.schema = schema_set.keys().cloned().collect();
+    let schema_len = report.schema.len();
+
+    let mut points = Vec::with_capacity(raw_by_ts.len());
+    let mut last_values: Vec<Option<f64>> = vec![None; schema_len];
+    for (timestamp, row) in raw_by_ts {
+        let mut has_missing = false;
+        let mut resolved = Vec::with_capacity(schema_len);
+        for (idx, key) in report.schema.iter().enumerate() {
+            let value = row.get(key).and_then(|v| *v);
+            if value.is_none() {
+                has_missing = true;
+            }
+            let v = match value {
+                Some(v) => {
+                    last_values[idx] = Some(v);
+                    v
+                }
+                None => match policy {
+                    MissingValuePolicy::Error => {
+                        return Err(format!(
+                            "missing sentiment value for key '{}' at ts={}",
+                            key, timestamp
+                        ))
+                    }
+                    MissingValuePolicy::ZeroFill => 0.0,
+                    MissingValuePolicy::ForwardFill => last_values[idx].unwrap_or(0.0),
+                    MissingValuePolicy::DropRow => 0.0,
+                },
+            };
+            resolved.push(v);
+        }
+
+        if has_missing && matches!(policy, MissingValuePolicy::DropRow) {
+            report.dropped_rows += 1;
+            continue;
+        }
+
+        points.push(SentimentPoint {
+            timestamp,
+            values: resolved,
+        });
     }
 
     Ok((points, report))
