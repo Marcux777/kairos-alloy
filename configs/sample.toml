@@ -57,6 +57,10 @@ feature_version = "v1"
 max_gaps = 0
 max_duplicates = 0
 max_out_of_order = 0
+max_invalid_close = 0
+max_sentiment_missing = 0
+max_sentiment_invalid = 0
+max_sentiment_dropped = 0
 
 [paper]
 replay_scale = 60

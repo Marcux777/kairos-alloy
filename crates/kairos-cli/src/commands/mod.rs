@@ -101,13 +101,21 @@ fn run_validate(config_path: PathBuf, strict: bool, out: Option<PathBuf>) -> Res
     let max_gaps = limits.and_then(|l| l.max_gaps).unwrap_or(0);
     let max_duplicates = limits.and_then(|l| l.max_duplicates).unwrap_or(0);
     let max_out_of_order = limits.and_then(|l| l.max_out_of_order).unwrap_or(0);
+    let max_invalid_close = limits.and_then(|l| l.max_invalid_close).unwrap_or(0);
+    let max_sentiment_missing = limits.and_then(|l| l.max_sentiment_missing).unwrap_or(0);
+    let max_sentiment_invalid = limits.and_then(|l| l.max_sentiment_invalid).unwrap_or(0);
+    let max_sentiment_dropped = limits.and_then(|l| l.max_sentiment_dropped).unwrap_or(0);
 
     if strict {
         if ohlcv_report.gaps > max_gaps
             || ohlcv_report.duplicates > max_duplicates
             || ohlcv_report.out_of_order > max_out_of_order
+            || ohlcv_report.invalid_close > max_invalid_close
             || s_duplicates > max_duplicates
             || s_out_of_order > max_out_of_order
+            || s_missing > max_sentiment_missing
+            || s_invalid > max_sentiment_invalid
+            || s_dropped > max_sentiment_dropped
         {
             return Err("strict validation failed: data quality limits exceeded".to_string());
         }
@@ -141,6 +149,10 @@ fn run_validate(config_path: PathBuf, strict: bool, out: Option<PathBuf>) -> Res
                 "max_gaps": max_gaps,
                 "max_duplicates": max_duplicates,
                 "max_out_of_order": max_out_of_order,
+                "max_invalid_close": max_invalid_close,
+                "max_sentiment_missing": max_sentiment_missing,
+                "max_sentiment_invalid": max_sentiment_invalid,
+                "max_sentiment_dropped": max_sentiment_dropped,
             },
             "strict": strict
         });
@@ -177,6 +189,18 @@ fn run_report(input: PathBuf) -> Result<(), String> {
     };
 
     write_summary_json(input.join("summary.json").as_path(), &summary, meta.as_ref())?;
+    if config_path.exists() {
+        if let Ok(config) = load_config(config_path.as_path()) {
+            if config
+                .report
+                .as_ref()
+                .and_then(|report| report.html)
+                .unwrap_or(false)
+            {
+                write_summary_html(input.join("summary.html").as_path(), &summary, meta.as_ref())?;
+            }
+        }
+    }
 
     let end_ts = equity.last().map(|p| p.timestamp).unwrap_or(0);
     let run_id = meta

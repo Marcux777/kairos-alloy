@@ -69,6 +69,7 @@ impl AgentClient {
     ) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_millis(timeout_ms))
+            .pool_idle_timeout(Duration::from_secs(90))
             .build()
             .expect("failed to build http client");
         Self {

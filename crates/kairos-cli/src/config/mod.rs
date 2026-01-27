@@ -98,6 +98,10 @@ pub struct DataQualityConfig {
     pub max_gaps: Option<usize>,
     pub max_duplicates: Option<usize>,
     pub max_out_of_order: Option<usize>,
+    pub max_invalid_close: Option<usize>,
+    pub max_sentiment_missing: Option<usize>,
+    pub max_sentiment_invalid: Option<usize>,
+    pub max_sentiment_dropped: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
