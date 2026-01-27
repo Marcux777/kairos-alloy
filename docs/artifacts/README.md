@@ -37,6 +37,7 @@ Audit log entries (one JSON object per line). Common fields:
 - `run_id`
 - `timestamp`
 - `stage`
+- `symbol` (optional)
 - `action`
+- `error` (optional)
 - `details` (object)
-

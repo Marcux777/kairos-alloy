@@ -82,10 +82,11 @@ where
             run_id: self.run_id.clone(),
             timestamp: 0,
             stage: "engine".to_string(),
+            symbol: Some(self.symbol.clone()),
             action: "start".to_string(),
+            error: None,
             details: json!({
                 "strategy": self.strategy.name(),
-                "symbol": self.symbol.clone(),
                 "size_mode": match self.size_mode {
                     OrderSizeMode::Quantity => "qty",
                     OrderSizeMode::PctEquity => "pct_equity",
@@ -114,7 +115,9 @@ where
             run_id: self.run_id.clone(),
             timestamp: 0,
             stage: "engine".to_string(),
+            symbol: Some(self.symbol.clone()),
             action: "complete".to_string(),
+            error: None,
             details: json!({
                 "bars_processed": summary.bars_processed,
                 "trades": summary.trades,
@@ -177,9 +180,10 @@ where
             run_id: self.run_id.clone(),
             timestamp: bar.timestamp,
             stage: "trade".to_string(),
+            symbol: Some(self.symbol.clone()),
             action: format!("{:?}", order.side),
+            error: None,
             details: json!({
-                "symbol": self.symbol.clone(),
                 "qty": order.quantity,
                 "price": price,
                 "fee": fee,
@@ -286,7 +290,9 @@ where
                     run_id: self.run_id.clone(),
                     timestamp: bar.timestamp,
                     stage: "order".to_string(),
+                    symbol: Some(self.symbol.clone()),
                     action: "schedule".to_string(),
+                    error: None,
                     details: json!({
                         "side": "BUY",
                         "requested_size": requested_size,
@@ -357,7 +363,9 @@ where
                     run_id: self.run_id.clone(),
                     timestamp: bar.timestamp,
                     stage: "order".to_string(),
+                    symbol: Some(self.symbol.clone()),
                     action: "schedule".to_string(),
+                    error: None,
                     details: json!({
                         "side": "SELL",
                         "requested_size": requested_size,
@@ -394,7 +402,9 @@ where
                     run_id: self.run_id.clone(),
                     timestamp: bar.timestamp,
                     stage: "risk".to_string(),
+                    symbol: Some(self.symbol.clone()),
                     action: "halt_drawdown".to_string(),
+                    error: None,
                     details: json!({
                         "drawdown_pct": drawdown,
                         "max_drawdown_pct": self.risk_limits.max_drawdown_pct,
@@ -456,11 +466,11 @@ fn order_reject_event(
         run_id: run_id.to_string(),
         timestamp,
         stage: "order".to_string(),
+        symbol: Some(symbol.to_string()),
         action: "reject".to_string(),
+        error: Some(reason.to_string()),
         details: json!({
-            "symbol": symbol,
             "strategy_id": strategy_id,
-            "reason": reason,
             "action_type": format!("{:?}", action_type),
             "requested_size": requested_size,
             "size_mode": match size_mode {

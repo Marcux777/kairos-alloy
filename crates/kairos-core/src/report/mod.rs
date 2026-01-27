@@ -11,7 +11,11 @@ pub struct AuditEvent {
     pub run_id: String,
     pub timestamp: i64,
     pub stage: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
     pub action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
     pub details: serde_json::Value,
 }
 
@@ -231,9 +235,10 @@ pub fn write_logs_jsonl(
             run_id: run_id.to_string(),
             timestamp: trade.timestamp,
             stage: "trade".to_string(),
+            symbol: Some(trade.symbol.clone()),
             action: format!("{:?}", trade.side),
+            error: None,
             details: serde_json::json!({
-                "symbol": trade.symbol,
                 "qty": trade.quantity,
                 "price": trade.price,
                 "fee": trade.fee,
@@ -248,7 +253,9 @@ pub fn write_logs_jsonl(
         run_id: run_id.to_string(),
         timestamp: 0,
         stage: "summary".to_string(),
+        symbol: None,
         action: "complete".to_string(),
+        error: None,
         details: serde_json::json!({
             "bars_processed": summary.bars_processed,
             "trades": summary.trades,

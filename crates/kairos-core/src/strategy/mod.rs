@@ -215,17 +215,18 @@ impl Strategy for AgentStrategy {
             run_id: self.run_id.clone(),
             timestamp: bar.timestamp,
             stage: "agent".to_string(),
+            symbol: Some(self.symbol.clone()),
             action: if used_fallback {
                 "fallback".to_string()
             } else {
                 "call".to_string()
             },
+            error: result.info.error.clone(),
             details: json!({
                 "url": self.agent.url.clone(),
                 "attempts": result.info.attempts,
                 "duration_ms": result.info.duration_ms,
                 "status": result.info.status,
-                "error": result.info.error,
                 "used_fallback": used_fallback,
                 "agent_latency_ms": agent_latency_ms,
                 "model_version": model_version,

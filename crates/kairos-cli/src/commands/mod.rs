@@ -491,9 +491,10 @@ fn run_report(input: PathBuf) -> Result<(), String> {
             run_id: run_id.clone(),
             timestamp: trade.timestamp,
             stage: "trade".to_string(),
+            symbol: Some(trade.symbol.clone()),
             action: format!("{:?}", trade.side),
+            error: None,
             details: serde_json::json!({
-                "symbol": trade.symbol,
                 "qty": trade.quantity,
                 "price": trade.price,
                 "fee": trade.fee,
@@ -508,7 +509,9 @@ fn run_report(input: PathBuf) -> Result<(), String> {
         run_id: run_id.clone(),
         timestamp: end_ts,
         stage: "report".to_string(),
+        symbol: None,
         action: "recompute".to_string(),
+        error: None,
         details: serde_json::json!({
             "input_dir": input.display().to_string(),
             "trades": trades.len(),
@@ -520,7 +523,9 @@ fn run_report(input: PathBuf) -> Result<(), String> {
         run_id: run_id.clone(),
         timestamp: end_ts,
         stage: "summary".to_string(),
+        symbol: meta.as_ref().map(|m| m.symbol.clone()),
         action: "complete".to_string(),
+        error: None,
         details: serde_json::json!({
             "meta": meta.as_ref().map(|m| serde_json::json!({
                 "run_id": m.run_id,
@@ -670,6 +675,7 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
             &config.run.run_id,
             0,
             "timing",
+            Some(&config.run.symbol),
             "resample_ohlcv",
             resample_start.elapsed().as_millis() as u64,
             serde_json::json!({
@@ -687,6 +693,7 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
         &config.run.run_id,
         0,
         "timing",
+        Some(&config.run.symbol),
         "load_ohlcv",
         stage_start.elapsed().as_millis() as u64,
         serde_json::json!({
@@ -732,6 +739,7 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
             &config.run.run_id,
             0,
             "timing",
+            Some(&config.run.symbol),
             "load_sentiment",
             stage_start.elapsed().as_millis() as u64,
             serde_json::json!({
@@ -774,6 +782,7 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
         &config.run.run_id,
         0,
         "timing",
+        Some(&config.run.symbol),
         "align_sentiment",
         stage_start.elapsed().as_millis() as u64,
         serde_json::json!({
@@ -864,6 +873,7 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
         &config.run.run_id,
         0,
         "timing",
+        Some(&config.run.symbol),
         "run_engine",
         stage_start.elapsed().as_millis() as u64,
         serde_json::json!({}),
@@ -1131,6 +1141,7 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
             &config.run.run_id,
             0,
             "timing",
+            Some(&config.run.symbol),
             "resample_ohlcv",
             resample_start.elapsed().as_millis() as u64,
             serde_json::json!({
@@ -1148,6 +1159,7 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
         &config.run.run_id,
         0,
         "timing",
+        Some(&config.run.symbol),
         "load_ohlcv",
         stage_start.elapsed().as_millis() as u64,
         serde_json::json!({
@@ -1207,6 +1219,7 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
             &config.run.run_id,
             0,
             "timing",
+            Some(&config.run.symbol),
             "load_sentiment",
             stage_start.elapsed().as_millis() as u64,
             serde_json::json!({
@@ -1235,6 +1248,7 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
         &config.run.run_id,
         0,
         "timing",
+        Some(&config.run.symbol),
         "align_sentiment",
         stage_start.elapsed().as_millis() as u64,
         serde_json::json!({
@@ -1331,6 +1345,7 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
         &config.run.run_id,
         0,
         "timing",
+        Some(&config.run.symbol),
         "run_engine",
         stage_start.elapsed().as_millis() as u64,
         serde_json::json!({}),
@@ -1380,6 +1395,7 @@ fn timing_event(
     run_id: &str,
     timestamp: i64,
     stage: &str,
+    symbol: Option<&str>,
     action: &str,
     duration_ms: u64,
     details: serde_json::Value,
@@ -1388,7 +1404,9 @@ fn timing_event(
         run_id: run_id.to_string(),
         timestamp,
         stage: stage.to_string(),
+        symbol: symbol.map(|s| s.to_string()),
         action: action.to_string(),
+        error: None,
         details: serde_json::json!({
             "duration_ms": duration_ms,
             "details": details,
