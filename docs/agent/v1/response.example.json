@@ -1,0 +1,8 @@
+{
+  "action_type": "HOLD",
+  "size": 0.0,
+  "confidence": 0.62,
+  "model_version": "drl-2026-01-01",
+  "latency_ms": 12
+}
+

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kairos-alloy://agent/v1/response.schema.json",
+  "title": "Kairos Alloy Agent Response (v1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["action_type", "size"],
+  "properties": {
+    "action_type": { "type": "string", "enum": ["BUY", "SELL", "HOLD"] },
+    "size": { "type": "number", "minimum": 0 },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "model_version": { "type": "string" },
+    "latency_ms": { "type": "integer", "minimum": 0 }
+  }
+}
+

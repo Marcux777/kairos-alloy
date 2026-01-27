@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kairos-alloy://agent/v1/request.schema.json",
+  "title": "Kairos Alloy Agent Request (v1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "api_version",
+    "feature_version",
+    "run_id",
+    "timestamp",
+    "symbol",
+    "timeframe",
+    "observation",
+    "portfolio_state"
+  ],
+  "properties": {
+    "api_version": { "type": "string", "minLength": 1 },
+    "feature_version": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "symbol": { "type": "string", "minLength": 1 },
+    "timeframe": { "type": "string", "minLength": 1 },
+    "observation": {
+      "type": "array",
+      "items": { "type": "number" }
+    },
+    "portfolio_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cash", "position_qty", "position_avg_price", "equity"],
+      "properties": {
+        "cash": { "type": "number" },
+        "position_qty": { "type": "number" },
+        "position_avg_price": { "type": "number" },
+        "equity": { "type": "number" }
+      }
+    }
+  }
+}
+

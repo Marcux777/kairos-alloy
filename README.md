@@ -6,6 +6,8 @@ Backtesting e execucao em Rust com agente DRL + sentimento em Python.
 
 Visao geral em `ARCHITECTURE.md`.
 
+Documentacao suplementar: `docs/README.md`.
+
 ## Workspace Rust
 
 Comandos locais (dentro do container):
