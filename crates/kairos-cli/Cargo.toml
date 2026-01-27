@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 description = "CLI for Kairos Alloy."
 license = "UNLICENSED"
+autobins = false
+default-run = "kairos-alloy"
+
+[[bin]]
+name = "kairos-alloy"
+path = "src/main.rs"
 
 [dependencies]
 kairos-core = { path = "../kairos-core" }

@@ -2,19 +2,23 @@ mod commands;
 mod config;
 mod output;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use commands::Command;
 use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "kairos-alloy")]
-#[command(about = "Kairos Alloy CLI", version, arg_required_else_help = true)]
+#[command(about = "Kairos Alloy CLI", version)]
 #[command(
     after_help = "Examples:\n  kairos-alloy backtest --config configs/sample.toml --out runs/\n  kairos-alloy paper --config configs/sample.toml --out runs/\n  kairos-alloy validate --config configs/sample.toml\n  kairos-alloy report --input runs/<run_id>/\n"
 )]
 struct Cli {
     #[command(subcommand)]
-    command: CliCommand,
+    command: Option<CliCommand>,
+
+    /// Print build metadata (version, commit, toolchain) and exit.
+    #[arg(long, default_value_t = false)]
+    build_info: bool,
 }
 
 #[derive(Subcommand)]
@@ -60,9 +64,26 @@ enum CliCommand {
 }
 
 fn main() {
-    output::print_banner();
     let cli = Cli::parse();
+
+    if cli.build_info {
+        print_build_info();
+        return;
+    }
+
     let command = match cli.command {
+        Some(command) => command,
+        None => {
+            output::print_banner();
+            let mut cmd = Cli::command();
+            let _ = cmd.print_help();
+            println!();
+            return;
+        }
+    };
+
+    output::print_banner();
+    let command = match command {
         CliCommand::Backtest { config, out } => Command::Backtest { config, out },
         CliCommand::Bench {
             bars,
@@ -88,4 +109,23 @@ fn main() {
         eprintln!("error: {}", err);
         std::process::exit(1);
     }
+}
+
+fn print_build_info() {
+    let version = env!("CARGO_PKG_VERSION");
+    let git_sha = option_env!("KAIROS_GIT_SHA").unwrap_or("unknown");
+    let build_unix_epoch = option_env!("KAIROS_BUILD_UNIX_EPOCH").and_then(|v| v.parse::<u64>().ok());
+    let rustc = option_env!("KAIROS_RUSTC_VERSION").unwrap_or("unknown");
+    let target = option_env!("KAIROS_TARGET").unwrap_or("unknown");
+
+    let info = serde_json::json!({
+        "name": "kairos-alloy",
+        "version": version,
+        "git_sha": git_sha,
+        "build_unix_epoch": build_unix_epoch,
+        "rustc": rustc,
+        "target": target,
+    });
+
+    println!("{}", info.to_string());
 }
