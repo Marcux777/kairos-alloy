@@ -783,8 +783,10 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "kairos-core",
+ "kairos-ingest",
  "serde",
  "serde_json",
+ "tokio",
  "toml",
 ]
 

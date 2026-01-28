@@ -129,3 +129,14 @@ Se o seu distro/usuário for diferente, ajuste o mount em `.devcontainer/devcont
 ```bash
 cargo test -p kairos-ingest
 ```
+
+### Testes de integração (PRD §20)
+
+Os testes E2E que cobrem Postgres (migrate + ingest-kucoin mock + backtest/paper + sentimento CSV/JSON)
+ficam desabilitados por padrão. Para rodar:
+
+```bash
+export KAIROS_DB_RUN_TESTS=1
+export KAIROS_DB_URL=postgres://kairos:secret@db:5432/kairos
+cargo test --workspace
+```
