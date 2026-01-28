@@ -1,0 +1,176 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin_ext: ""
+            archive_ext: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin_ext: .exe
+            archive_ext: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify tag matches crate versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "release version: ${VERSION}"
+
+          cli_ver="$(python - <<'PY'
+import tomllib, pathlib
+data = tomllib.loads(pathlib.Path("crates/kairos-cli/Cargo.toml").read_text(encoding="utf-8"))
+print(data["package"]["version"])
+PY
+)"
+          ingest_ver="$(python - <<'PY'
+import tomllib, pathlib
+data = tomllib.loads(pathlib.Path("crates/kairos-ingest/Cargo.toml").read_text(encoding="utf-8"))
+print(data["package"]["version"])
+PY
+)"
+
+          test "${cli_ver}" = "${VERSION}" || (echo "kairos-cli version ${cli_ver} != ${VERSION}" && exit 1)
+          test "${ingest_ver}" = "${VERSION}" || (echo "kairos-ingest version ${ingest_ver} != ${VERSION}" && exit 1)
+
+      - name: Build (release)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p kairos-cli --bin kairos-alloy
+          cargo build --release --locked -p kairos-ingest --bin kairos-ingest
+
+      - name: Stage dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          TARGET="${{ matrix.target }}"
+          PKG_DIR="kairos-${VERSION}-${TARGET}"
+          mkdir -p "dist/${PKG_DIR}/bin"
+
+          cp "target/release/kairos-alloy${{ matrix.bin_ext }}" "dist/${PKG_DIR}/bin/"
+          cp "target/release/kairos-ingest${{ matrix.bin_ext }}" "dist/${PKG_DIR}/bin/"
+          cp "README.md" "dist/${PKG_DIR}/"
+          cp "CHANGELOG.md" "dist/${PKG_DIR}/"
+
+          ARCHIVE="kairos-${VERSION}-${TARGET}.${{ matrix.archive_ext }}"
+          echo "PKG_DIR=${PKG_DIR}" >> "$GITHUB_ENV"
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      - name: Create tar.gz (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf "${ARCHIVE}" -C dist "${PKG_DIR}"
+
+      - name: Create zip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Push-Location dist
+          Compress-Archive -Path "$env:PKG_DIR" -DestinationPath "..\\$env:ARCHIVE"
+          Pop-Location
+
+      - name: Write SHA256 checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+import hashlib, os, pathlib
+archive = pathlib.Path(os.environ["ARCHIVE"])
+h = hashlib.sha256(archive.read_bytes()).hexdigest()
+out = archive.with_suffix(archive.suffix + ".sha256")
+out.write_text(f"{h}  {archive.name}\n", encoding="utf-8")
+print(out.name)
+PY
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kairos-${{ github.ref_name }}-${{ matrix.target }}
+          path: |
+            ${{ env.ARCHIVE }}
+            ${{ env.ARCHIVE }}.sha256
+
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Build release body from CHANGELOG.md
+        shell: bash
+        run: |
+          set -euo pipefail
+          export VERSION="${GITHUB_REF_NAME#v}"
+          python - <<'PY'
+import os, re, pathlib
+version = os.environ["VERSION"]
+changelog = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+
+pattern = re.compile(rf"^## \\[{re.escape(version)}\\] - .*$", re.M)
+m = pattern.search(changelog)
+if not m:
+    pathlib.Path("release-body.md").write_text(
+        f"Release v{version}\\n\\nSee CHANGELOG.md for details.\\n",
+        encoding="utf-8",
+    )
+    raise SystemExit(0)
+
+start = m.start()
+rest = changelog[m.end():]
+next_hdr = re.search(r"^## \\[", rest, flags=re.M)
+end = m.end() + (next_hdr.start() if next_hdr else len(rest))
+body = changelog[start:end].strip() + "\n"
+pathlib.Path("release-body.md").write_text(body, encoding="utf-8")
+print("release-body.md written")
+PY
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Kairos Alloy ${{ github.ref_name }}
+          body_path: release-body.md
+          files: |
+            release-assets/**/*

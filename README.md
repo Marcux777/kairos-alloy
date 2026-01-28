@@ -17,6 +17,29 @@ cargo build
 cargo run -p kairos-cli
 ```
 
+## Instalacao via Releases
+
+Os binarios oficiais sao publicados no GitHub Releases (Linux/Windows) com checksums SHA256.
+
+Linux (x86_64):
+
+```bash
+sha256sum -c kairos-X.Y.Z-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar -xzf kairos-X.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+./kairos-X.Y.Z-x86_64-unknown-linux-gnu/bin/kairos-alloy --version
+./kairos-X.Y.Z-x86_64-unknown-linux-gnu/bin/kairos-ingest --help
+```
+
+Windows (x86_64, PowerShell):
+
+```powershell
+# Compare o hash do arquivo com o valor dentro do .sha256
+Get-FileHash kairos-X.Y.Z-x86_64-pc-windows-msvc.zip -Algorithm SHA256
+Expand-Archive kairos-X.Y.Z-x86_64-pc-windows-msvc.zip -DestinationPath .
+.\kairos-X.Y.Z-x86_64-pc-windows-msvc\bin\kairos-alloy.exe --version
+.\kairos-X.Y.Z-x86_64-pc-windows-msvc\bin\kairos-ingest.exe --help
+```
+
 ## Benchmark de performance (PRD)
 
 Rodar benchmark sintético de 500k barras em `--release` (mede throughput do engine e pipeline de features):
