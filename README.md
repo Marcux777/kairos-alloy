@@ -98,6 +98,8 @@ cargo run -p kairos-cli -- report --input runs/<run_id>/
 cargo run -p kairos-cli -- --build-info
 ```
 
+Nota: o comando `report` regenera o sumario/HTML a partir dos artefatos do run (ex.: `trades.csv`, `equity.csv`, `config_snapshot.toml`) via `kairos-application::reporting` (o `kairos-cli` delega como composition root).
+
 ## Quickstart (10 minutos)
 
 Em 2 terminais, dentro do ambiente `dev` (Docker):

@@ -19,6 +19,7 @@ Historically, the MVP used a single “core” crate that mixed:
 - IO concerns (Postgres OHLCV loader, filesystem sentiment loader, HTTP agent client)
 
 **Status:** the workspace has since been split into `kairos-domain`, `kairos-infrastructure`, and `kairos-application`, and the old `kairos-core` crate has been removed. The CLI now acts as a thin composition root and delegates orchestration to `kairos-application` for backtest/paper/validate.
+`kairos-alloy report` is implemented via `kairos-application::reporting` (CLI delegates as a thin composition root).
 
 ## Target workspace layout
 
@@ -149,14 +150,14 @@ pub trait Clock {
 
 ## Application layer (use cases)
 
-Use cases live in `kairos-application/src/backtesting/`, `kairos-application/src/paper_trading/`, and `kairos-application/src/validation/`.
+Implemented use cases live in `kairos-application/src/backtesting/`, `kairos-application/src/paper_trading/`, and `kairos-application/src/validation/`. Reporting and benchmarking can be migrated next to keep the CLI as a pure composition root.
 
 ### Use cases
-- `RunBacktest`
-- `RunPaper`
-- `ValidateData`
-- `GenerateReport`
-- `BenchFeatures`
+- `RunBacktest` (implemented)
+- `RunPaper` (implemented)
+- `ValidateData` (implemented)
+- `GenerateReport` (next; currently orchestrated in `kairos-cli`)
+- `BenchFeatures` (future; currently in `kairos-cli`)
 
 Each use case:
 - receives input config DTOs (already validated)
@@ -212,7 +213,7 @@ Acceptance criteria:
 Acceptance criteria:
 - CLI behavior unchanged (golden files / integration tests remain green).
 
-**Status:** completed for backtest/paper/validate; reporting regeneration (`kairos-alloy report`) can be migrated next.
+**Status:** completed for backtest/paper/validate/report. The remaining migration work is optional hardening (e.g., more ports, better typed errors, and more use-case tests with mocked adapters).
 
 ### Phase 3 — Domain aggregate + domain events
 1. Introduce `TradingAccount` aggregate, replace direct portfolio/risk mutations with aggregate methods.

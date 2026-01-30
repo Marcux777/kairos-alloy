@@ -1,6 +1,6 @@
 use crate::reporting;
 use kairos_domain::entities::metrics::MetricsSummary;
-use kairos_domain::repositories::artifacts::ArtifactWriter;
+use kairos_domain::repositories::artifacts::{ArtifactReader, ArtifactWriter};
 use kairos_domain::services::audit::AuditEvent;
 use kairos_domain::value_objects::equity_point::EquityPoint;
 use kairos_domain::value_objects::trade::Trade;
@@ -73,5 +73,37 @@ impl ArtifactWriter for FilesystemArtifactWriter {
                 err
             )
         })
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FilesystemArtifactReader;
+
+impl FilesystemArtifactReader {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl ArtifactReader for FilesystemArtifactReader {
+    fn read_trades_csv(&self, path: &Path) -> Result<Vec<Trade>, String> {
+        reporting::read_trades_csv(path)
+    }
+
+    fn read_equity_csv(&self, path: &Path) -> Result<Vec<EquityPoint>, String> {
+        reporting::read_equity_csv(path)
+    }
+
+    fn read_config_snapshot_toml(&self, path: &Path) -> Result<Option<String>, String> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        fs::read_to_string(path)
+            .map(Some)
+            .map_err(|err| format!("failed to read config snapshot {}: {}", path.display(), err))
+    }
+
+    fn exists(&self, path: &Path) -> bool {
+        path.exists()
     }
 }

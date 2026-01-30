@@ -4,7 +4,7 @@
 Kairos Alloy is a Rust-first system organized as a workspace with five crates:
 
 - `kairos-domain`: domain types + pure engine logic (no IO)
-- `kairos-application`: use cases / orchestration (backtest/paper/validate)
+- `kairos-application`: use cases / orchestration (backtest/paper/validate/report)
 - `kairos-infrastructure`: adapters (Postgres, filesystem, HTTP)
 - `kairos-cli`: command-line interface
 - `kairos-ingest`: data ingestion (KuCoin OHLCV → PostgreSQL) + DB migrations
@@ -45,6 +45,7 @@ Modules:
 - `commands`: CLI subcommands and routing
 - `config`: re-exported config types/loader from `kairos-application`
 - `output`: summaries and report formatting
+- `commands/report`: regenerates reports from run artifacts via `kairos-application::reporting`
 
 ### kairos-ingest
 Ingests OHLCV from KuCoin and persists it in PostgreSQL.
@@ -56,15 +57,16 @@ Use cases / orchestration:
 - `backtesting`: backtest run orchestration + artifact writing
 - `paper_trading`: replay/paper orchestration + artifact writing
 - `validation`: data quality validation report
+- `reporting`: regenerate reports from existing run artifacts (`kairos-alloy report`)
 
 ### kairos-infrastructure
 Concrete adapters for Postgres, filesystem, HTTP agents, and artifact/report writing.
 
 ## High-Level Flow
 1. CLI loads config
-2. CLI initializes adapters + strategy
-3. Backtest runner processes market data
-4. Metrics are computed and reported
+2. CLI initializes adapters and calls `kairos-application` use cases
+3. Domain engine processes market data
+4. Artifacts are written via ports/adapters
 
 ## Invariants
 - Domain should not depend on CLI / adapters

@@ -24,3 +24,10 @@ pub trait ArtifactWriter {
     fn write_audit_jsonl(&self, path: &Path, events: &[AuditEvent]) -> Result<(), String>;
     fn write_config_snapshot_toml(&self, path: &Path, contents: &str) -> Result<(), String>;
 }
+
+pub trait ArtifactReader {
+    fn read_trades_csv(&self, path: &Path) -> Result<Vec<Trade>, String>;
+    fn read_equity_csv(&self, path: &Path) -> Result<Vec<EquityPoint>, String>;
+    fn read_config_snapshot_toml(&self, path: &Path) -> Result<Option<String>, String>;
+    fn exists(&self, path: &Path) -> bool;
+}

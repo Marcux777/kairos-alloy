@@ -1,5 +1,4 @@
 use kairos_domain::entities::metrics::MetricsSummary;
-use kairos_domain::entities::metrics::{MetricsConfig, MetricsState};
 use kairos_domain::services::audit::AuditEvent;
 use kairos_domain::value_objects::equity_point::EquityPoint;
 use kairos_domain::value_objects::side::Side;
@@ -269,14 +268,7 @@ pub fn read_equity_csv(path: &Path) -> Result<Vec<EquityPoint>, String> {
 }
 
 pub fn recompute_summary(trades: &[Trade], equity: &[EquityPoint]) -> MetricsSummary {
-    let mut state = MetricsState::new(MetricsConfig::default());
-    for point in equity {
-        state.record_equity(point.clone());
-    }
-    for trade in trades {
-        state.record_trade(trade.clone());
-    }
-    state.summary()
+    kairos_domain::entities::metrics::recompute_summary(trades, equity)
 }
 
 pub fn write_logs_jsonl(

@@ -206,6 +206,17 @@ impl MetricsState {
     }
 }
 
+pub fn recompute_summary(trades: &[Trade], equity: &[EquityPoint]) -> MetricsSummary {
+    let mut state = MetricsState::new(MetricsConfig::default());
+    for point in equity {
+        state.record_equity(point.clone());
+    }
+    for trade in trades {
+        state.record_trade(trade.clone());
+    }
+    state.summary()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{MetricsConfig, MetricsState};

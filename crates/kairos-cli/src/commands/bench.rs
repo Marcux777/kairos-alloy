@@ -1,9 +1,9 @@
-use super::features;
-use super::BacktestRunner;
-use super::BuyAndHold;
-use super::MetricsConfig;
-use super::RiskLimits;
-use super::VecBarSource;
+use kairos_domain::entities::metrics::MetricsConfig;
+use kairos_domain::entities::risk::RiskLimits;
+use kairos_domain::services::engine::backtest::BacktestRunner;
+use kairos_domain::services::features;
+use kairos_domain::services::market_data_source::VecBarSource;
+use kairos_domain::services::strategy::BuyAndHold;
 use std::time::Instant;
 
 #[derive(Clone, Copy)]
