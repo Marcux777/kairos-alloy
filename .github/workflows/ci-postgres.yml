@@ -1,13 +1,17 @@
 name: CI (Postgres)
 
 on:
+  push:
+    branches:
+      - main
+  pull_request:
   workflow_dispatch:
   schedule:
     - cron: "0 3 * * *"
 
 jobs:
   test_postgres:
-    name: Postgres Integration (nightly)
+    name: Postgres Integration (PRD20)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -15,7 +19,7 @@ jobs:
         env:
           POSTGRES_DB: kairos
           POSTGRES_USER: kairos
-          POSTGRES_PASSWORD: secret
+          POSTGRES_PASSWORD: ${{ github.run_id }}
         ports:
           - 5432:5432
         options: >-
@@ -25,7 +29,7 @@ jobs:
           --health-retries 10
     env:
       KAIROS_DB_RUN_TESTS: "1"
-      KAIROS_DB_URL: "postgres://kairos:secret@localhost:5432/kairos"
+      KAIROS_DB_URL: "postgres://kairos:${{ github.run_id }}@localhost:5432/kairos"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,6 +42,6 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Test (workspace)
+      - name: Test (prd20 integration)
         shell: bash
-        run: cargo test --workspace --locked
+        run: cargo test -p kairos-cli --test prd20_integration --locked

@@ -1,3 +1,22 @@
+//! Backtesting engine (bar-based).
+//!
+//! # What this simulator is (MVP-friendly)
+//! - Deterministic, bar-based simulation over OHLCV candles.
+//! - Long-only portfolio model (cash + single-asset position).
+//! - Two execution modes:
+//!   - `ExecutionModel::Simple`: applies a fixed market impact model (spread + slippage) and fills at a bar reference.
+//!   - `ExecutionModel::Complete`: keeps a small order book (market/limit/stop), supports time-in-force, latency in bars,
+//!     and volume caps (partial fills across bars).
+//! - Fees and slippage are modeled as aggregated bps costs (not venue-accurate maker/taker tiers).
+//!
+//! # Important simplifications (not “real trading”)
+//! Even with `ExecutionModel::Complete`, this is still a simplified simulator:
+//! - No L2 order book / queue priority / matching engine; fills are derived from OHLCV constraints.
+//! - No exchange microstructure (crossing, rebates, maker/taker, funding, borrow, liquidation).
+//! - No realistic latency distribution (latency is modeled as an integer number of bars).
+//! - No multi-asset portfolio, no hedging, no shorting, no leverage/margin.
+//! - No complex order types (OCO, iceberg, post-only, reduce-only, etc.).
+//! - Price references are bar-based (e.g., next bar open / within-bar touch), not tick-accurate.
 use crate::engine::execution::{
     ExecutionConfig, ExecutionModel, OrderKind, PriceReference, TimeInForce,
 };

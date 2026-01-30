@@ -301,17 +301,26 @@ fn parse_timestamp(value: &str) -> Result<i64, String> {
 mod tests {
     use super::{align_with_bars, load_csv, load_json};
     use std::fs;
-    use std::path::Path;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_tmp_path(name: &str) -> PathBuf {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("kairos_{name}_{}_{}", std::process::id(), now))
+    }
 
     #[test]
     fn load_csv_parses_points() {
-        let tmp_path = Path::new("/tmp/kairos_sentiment_test.csv");
+        let tmp_path = unique_tmp_path("sentiment_test.csv");
         let csv_data = "timestamp_utc,score\n\
 2026-01-01T00:00:00Z,0.5\n\
 2026-01-01T00:00:01Z,0.4\n";
-        fs::write(tmp_path, csv_data).expect("write csv");
+        fs::write(&tmp_path, csv_data).expect("write csv");
 
-        let (points, report) = load_csv(tmp_path).expect("load csv");
+        let (points, report) = load_csv(&tmp_path).expect("load csv");
         assert_eq!(points.len(), 2);
         assert_eq!(report.duplicates, 0);
         assert_eq!(points[0].values.len(), 1);
@@ -319,14 +328,14 @@ mod tests {
 
     #[test]
     fn load_json_parses_points() {
-        let tmp_path = Path::new("/tmp/kairos_sentiment_test.json");
+        let tmp_path = unique_tmp_path("sentiment_test.json");
         let json_data = r#"[
   {"timestamp_utc": "2026-01-01T00:00:00Z", "score": 0.7},
   {"timestamp_utc": "2026-01-01T00:00:02Z", "score": 0.2}
 ]"#;
-        fs::write(tmp_path, json_data).expect("write json");
+        fs::write(&tmp_path, json_data).expect("write json");
 
-        let (points, report) = load_json(tmp_path).expect("load json");
+        let (points, report) = load_json(&tmp_path).expect("load json");
         assert_eq!(points.len(), 2);
         assert_eq!(report.out_of_order, 0);
         assert_eq!(points[0].values.len(), 1);

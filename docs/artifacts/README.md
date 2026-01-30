@@ -17,6 +17,9 @@ Header:
 timestamp_utc,symbol,side,qty,price,fee,slippage,strategy_id,reason
 ```
 
+Nota:
+- `timestamp_utc` é **epoch seconds** (UTC).
+
 ## equity.csv
 
 Header:
@@ -24,6 +27,11 @@ Header:
 ```
 timestamp_utc,equity,cash,position_qty,unrealized_pnl,realized_pnl
 ```
+
+Nota:
+- `timestamp_utc` é **epoch seconds** (UTC).
+- `realized_pnl` é o PnL realizado acumulado do portfólio.
+- O custo-base (`position_avg_price`) é tratado como **incluindo fees de BUY** (cost basis por unidade).
 
 ## summary.json
 

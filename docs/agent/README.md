@@ -5,6 +5,7 @@ Kairos Alloy integrates with an external inference service (usually Python) via 
 ## Endpoint
 
 - `POST /v1/act`
+- `POST /v1/act_batch` (optional)
 
 ## Versioning
 
@@ -20,8 +21,11 @@ The engine will log agent diagnostics to `logs.jsonl` during execution (latency,
 Schemas:
 - `docs/agent/v1/request.schema.json`
 - `docs/agent/v1/response.schema.json`
+- `docs/agent/v1/request_batch.schema.json`
+- `docs/agent/v1/response_batch.schema.json`
 
 Examples:
 - `docs/agent/v1/request.example.json`
 - `docs/agent/v1/response.example.json`
-
+- `docs/agent/v1/request_batch.example.json`
+- `docs/agent/v1/response_batch.example.json`

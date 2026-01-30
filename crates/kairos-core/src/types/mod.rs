@@ -1,3 +1,7 @@
+use serde::{Deserialize, Serialize};
+
+pub mod timeframe;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Bar {
     pub symbol: String,
@@ -43,13 +47,15 @@ pub struct Position {
     pub avg_price: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
 pub enum Side {
     Buy,
     Sell,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
 pub enum ActionType {
     Buy,
     Sell,

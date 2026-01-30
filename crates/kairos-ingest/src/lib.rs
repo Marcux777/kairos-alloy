@@ -1,7 +1,9 @@
 use chrono::{DateTime, TimeZone, Utc};
 use clap::ValueEnum;
+use kairos_core::types::timeframe::Timeframe;
 use reqwest::Client;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
 use tokio_postgres::{Client as PgClient, NoTls};
@@ -10,6 +12,7 @@ const KUCOIN_SPOT_BASE: &str = "https://api.kucoin.com";
 const KUCOIN_FUTURES_BASE: &str = "https://api-futures.kucoin.com";
 const KUCOIN_SPOT_LIMIT: i64 = 1500;
 const KUCOIN_FUTURES_LIMIT: i64 = 500;
+const MIGRATION_LOCK_ID: i64 = 891_507_011;
 
 #[derive(ValueEnum, Clone, Debug)]
 pub enum Market {
@@ -42,15 +45,7 @@ struct KucoinResponse {
 }
 
 pub async fn migrate_db(db_url: &str, migrations_path: &Path) -> Result<(), String> {
-    let sql = std::fs::read_to_string(migrations_path).map_err(|err| {
-        format!(
-            "failed to read migrations file {}: {}",
-            migrations_path.display(),
-            err
-        )
-    })?;
-
-    let (client, connection) = tokio_postgres::connect(db_url, NoTls)
+    let (mut client, connection) = tokio_postgres::connect(db_url, NoTls)
         .await
         .map_err(|err| format!("failed to connect to postgres: {err}"))?;
     tokio::spawn(async move {
@@ -59,11 +54,116 @@ pub async fn migrate_db(db_url: &str, migrations_path: &Path) -> Result<(), Stri
         }
     });
 
+    acquire_migration_lock(&client).await?;
+    let result = if migrations_path.is_dir() {
+        migrate_dir(&mut client, migrations_path).await?;
+        println!("migrate complete: {}", migrations_path.display());
+        Ok(())
+    } else if !migrations_path.is_file() {
+        Err(format!(
+            "migrations path does not exist: {}",
+            migrations_path.display()
+        ))
+    } else {
+        let sql = std::fs::read_to_string(migrations_path).map_err(|err| {
+            format!(
+                "failed to read migrations file {}: {}",
+                migrations_path.display(),
+                err
+            )
+        })?;
+        client
+            .batch_execute(&sql)
+            .await
+            .map_err(|err| format!("failed to apply migrations: {err}"))?;
+        println!("migrate complete (legacy): {}", migrations_path.display());
+        Ok(())
+    };
+    release_migration_lock(&client).await;
+    result
+}
+
+async fn acquire_migration_lock(client: &PgClient) -> Result<(), String> {
     client
-        .batch_execute(&sql)
+        .execute("SELECT pg_advisory_lock($1)", &[&MIGRATION_LOCK_ID])
         .await
-        .map_err(|err| format!("failed to apply migrations: {err}"))?;
-    println!("migrate complete: {}", migrations_path.display());
+        .map_err(|err| format!("failed to acquire migration lock: {err}"))?;
+    Ok(())
+}
+
+async fn release_migration_lock(client: &PgClient) {
+    let _ = client
+        .execute("SELECT pg_advisory_unlock($1)", &[&MIGRATION_LOCK_ID])
+        .await;
+}
+
+async fn migrate_dir(client: &mut PgClient, migrations_dir: &Path) -> Result<(), String> {
+    client
+        .batch_execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations (\
+               version TEXT PRIMARY KEY,\
+               applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()\
+             );",
+        )
+        .await
+        .map_err(|err| format!("failed to ensure schema_migrations: {err}"))?;
+
+    let rows = client
+        .query("SELECT version FROM schema_migrations", &[])
+        .await
+        .map_err(|err| format!("failed to query schema_migrations: {err}"))?;
+    let mut applied: HashSet<String> = HashSet::with_capacity(rows.len());
+    for row in rows {
+        let version: String = row.get(0);
+        applied.insert(version);
+    }
+
+    let mut entries: Vec<_> = std::fs::read_dir(migrations_dir)
+        .map_err(|err| {
+            format!(
+                "failed to list migrations dir {}: {}",
+                migrations_dir.display(),
+                err
+            )
+        })?
+        .filter_map(|e| e.ok())
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+
+    for entry in entries {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("sql") {
+            continue;
+        }
+
+        let version = entry.file_name().to_string_lossy().to_string();
+        if applied.contains(&version) {
+            continue;
+        }
+
+        let sql = std::fs::read_to_string(&path)
+            .map_err(|err| format!("failed to read migration {}: {}", path.display(), err))?;
+
+        let tx = client
+            .transaction()
+            .await
+            .map_err(|err| format!("failed to start migration transaction: {err}"))?;
+        tx.batch_execute(&sql)
+            .await
+            .map_err(|err| format!("failed to apply migration {version}: {err}"))?;
+        tx.execute(
+            "INSERT INTO schema_migrations (version) VALUES ($1)",
+            &[&version],
+        )
+        .await
+        .map_err(|err| format!("failed to record migration {version}: {err}"))?;
+        tx.commit()
+            .await
+            .map_err(|err| format!("failed to commit migration {version}: {err}"))?;
+
+        println!("applied migration: {}", version);
+    }
+
     Ok(())
 }
 
@@ -181,38 +281,66 @@ pub async fn ingest_kucoin(
     Ok(())
 }
 
-fn normalize_timeframe(market: &Market, value: &str) -> Result<TimeframeInfo, String> {
-    let trimmed = value.trim().to_lowercase();
-    let (api, canonical, seconds) = match trimmed.as_str() {
-        "1min" | "1m" => ("1min", "1min", 60),
-        "3min" | "3m" => ("3min", "3min", 180),
-        "5min" | "5m" => ("5min", "5min", 300),
-        "15min" | "15m" => ("15min", "15min", 900),
-        "30min" | "30m" => ("30min", "30min", 1800),
-        "1hour" | "1h" => ("1hour", "1hour", 3600),
-        "2hour" | "2h" => ("2hour", "2hour", 7200),
-        "4hour" | "4h" => ("4hour", "4hour", 14400),
-        "6hour" | "6h" => ("6hour", "6hour", 21600),
-        "8hour" | "8h" => ("8hour", "8hour", 28800),
-        "12hour" | "12h" => ("12hour", "12hour", 43200),
-        "1day" | "1d" => ("1day", "1day", 86400),
-        "1week" | "1w" => ("1week", "1week", 604800),
-        "1month" => ("1month", "1month", 2592000),
-        other => {
-            if matches!(market, Market::Futures) {
-                let seconds = other
-                    .parse::<i64>()
-                    .map_err(|_| format!("unsupported futures timeframe: {}", value))?;
-                (other, other, seconds)
-            } else {
-                return Err(format!("unsupported spot timeframe: {}", value));
-            }
+#[cfg(test)]
+mod migrations_tests {
+    use super::migrate_db;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn should_run_db_tests() -> bool {
+        std::env::var("KAIROS_DB_RUN_TESTS").ok().as_deref() == Some("1")
+    }
+
+    fn db_url() -> Option<String> {
+        std::env::var("KAIROS_DB_URL").ok()
+    }
+
+    fn unique_tmp_dir(prefix: &str) -> std::path::PathBuf {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("kairos_{prefix}_{}_{}", std::process::id(), now))
+    }
+
+    #[tokio::test]
+    async fn migrate_dir_is_idempotent() {
+        if !should_run_db_tests() {
+            return;
         }
+        let Some(db_url) = db_url() else {
+            return;
+        };
+
+        let dir = unique_tmp_dir("migrations_dir");
+        let _ = fs::create_dir_all(&dir);
+
+        // Minimal migration that should succeed on repeated runs.
+        fs::write(
+            dir.join("0001_create_test.sql"),
+            "CREATE TABLE IF NOT EXISTS kairos_migration_test (id INT PRIMARY KEY);",
+        )
+        .expect("write migration");
+
+        migrate_db(&db_url, dir.as_path())
+            .await
+            .expect("first migrate");
+        migrate_db(&db_url, dir.as_path())
+            .await
+            .expect("second migrate");
+    }
+}
+
+fn normalize_timeframe(market: &Market, value: &str) -> Result<TimeframeInfo, String> {
+    let tf = match market {
+        Market::Spot => Timeframe::parse(value)?,
+        Market::Futures => Timeframe::parse_or_seconds(value)?,
     };
+
     Ok(TimeframeInfo {
-        api: api.to_string(),
-        canonical: canonical.to_string(),
-        seconds,
+        api: tf.label.clone(),
+        canonical: tf.label,
+        seconds: tf.step_seconds,
     })
 }
 

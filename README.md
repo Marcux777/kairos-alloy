@@ -32,6 +32,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 Para rodar `kairos-ingest`/`validate`/`backtest` com dados reais, você precisa de um PostgreSQL acessível e `db.url` ajustado no `configs/*.toml`.
 
+## Segurança (checks locais)
+
+Para rodar os mesmos “gates” de supply-chain/segurança localmente (quando aplicável):
+
+```bash
+./scripts/security-check.sh
+```
+
 ## Instalacao via Releases
 
 Os binarios oficiais sao publicados no GitHub Releases (Linux/Windows) com checksums SHA256.
@@ -68,9 +76,9 @@ cargo run -p kairos-cli --release -- bench --bars 500000 --mode features --json
 Migracao da tabela e ingestao de candles KuCoin:
 
 ```bash
-cargo run -p kairos-ingest -- migrate --db-url postgres://kairos:secret@db:5432/kairos
+cargo run -p kairos-ingest -- migrate --db-url "$KAIROS_DB_URL"
 cargo run -p kairos-ingest -- ingest-kucoin \
-  --db-url postgres://kairos:secret@db:5432/kairos \
+  --db-url "$KAIROS_DB_URL" \
   --symbol BTC-USDT \
   --market spot \
   --timeframe 1min \
@@ -102,9 +110,9 @@ docker compose run --rm dev
 Terminal A (migrate + ingest pequeno):
 
 ```bash
-cargo run -p kairos-ingest -- migrate --db-url postgres://kairos:secret@db:5432/kairos
+cargo run -p kairos-ingest -- migrate --db-url "$KAIROS_DB_URL"
 cargo run -p kairos-ingest -- ingest-kucoin \
-  --db-url postgres://kairos:secret@db:5432/kairos \
+  --db-url "$KAIROS_DB_URL" \
   --symbol BTC-USDT \
   --market spot \
   --timeframe 1min \
@@ -174,6 +182,16 @@ docker run -it \
 
 Por padrão, o banco roda no serviço `db` do `docker-compose.yml` (host `db:5432` dentro do container) e também fica acessível no host em `localhost:5432`.
 
+### DB URL via env (recomendado)
+
+Para evitar colocar senha em arquivos versionados, prefira definir o DB URL via env:
+
+```bash
+cp .env.example .env
+# edite KAIROS_DB_PASSWORD no .env
+export KAIROS_DB_URL="postgres://$KAIROS_DB_USER:$KAIROS_DB_PASSWORD@db:5432/$KAIROS_DB_NAME"
+```
+
 ### Dev Containers (VS Code / Antigravity)
 
 Se você estiver no Windows usando WSL, o `devcontainer.json` já monta o Codex config a partir do caminho WSL:
@@ -195,6 +213,6 @@ ficam desabilitados por padrão. Para rodar:
 
 ```bash
 export KAIROS_DB_RUN_TESTS=1
-export KAIROS_DB_URL=postgres://kairos:secret@db:5432/kairos
+export KAIROS_DB_URL="postgres://kairos:$KAIROS_DB_PASSWORD@db:5432/$KAIROS_DB_NAME"
 cargo test --workspace
 ```

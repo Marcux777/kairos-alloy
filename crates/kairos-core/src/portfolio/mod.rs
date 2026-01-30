@@ -67,7 +67,8 @@ impl Portfolio {
                     Some(pos) => {
                         let total_qty = pos.quantity + quantity;
                         if total_qty > 0.0 {
-                            let weighted_cost = pos.avg_price * pos.quantity + price * quantity;
+                            // Track average cost basis per unit (inclusive of BUY fees).
+                            let weighted_cost = pos.avg_price * pos.quantity + cost;
                             pos.avg_price = weighted_cost / total_qty;
                         }
                         pos.quantity = total_qty;
@@ -76,7 +77,7 @@ impl Portfolio {
                         self.positions.push(Position {
                             symbol: symbol.to_string(),
                             quantity,
-                            avg_price: price,
+                            avg_price: cost / quantity,
                         });
                     }
                 }

@@ -3,9 +3,9 @@ services:
     image: postgres:14
     restart: unless-stopped
     environment:
-      POSTGRES_USER: kairos
-      POSTGRES_PASSWORD: secret
-      POSTGRES_DB: kairos
+      POSTGRES_USER: ${KAIROS_DB_USER:-kairos}
+      POSTGRES_PASSWORD: ${KAIROS_DB_PASSWORD:?set KAIROS_DB_PASSWORD (see .env.example)}
+      POSTGRES_DB: ${KAIROS_DB_NAME:-kairos}
     ports:
       - "5432:5432"
     volumes:
@@ -31,7 +31,7 @@ services:
     volumes:
       - .:/workspaces/kairos-alloy
     environment:
-      KAIROS_DB_URL: postgres://kairos:secret@db:5432/kairos
+      KAIROS_DB_URL: postgres://${KAIROS_DB_USER:-kairos}:${KAIROS_DB_PASSWORD}@db:5432/${KAIROS_DB_NAME:-kairos}
     command: bash
 
 volumes:
