@@ -85,14 +85,14 @@ pub fn load_csv_with_policy(
         report.last_timestamp = Some(timestamp);
 
         let mut values: Vec<Option<f64>> = vec![None; schema_len];
-        for idx in 0..schema_len {
+        for (idx, slot) in values.iter_mut().enumerate() {
             let raw = record.get(idx + 1).unwrap_or("");
             if raw.trim().is_empty() {
                 report.missing_values += 1;
                 continue;
             }
             match raw.parse::<f64>() {
-                Ok(value) => values[idx] = Some(value),
+                Ok(value) => *slot = Some(value),
                 Err(_) => {
                     report.invalid_values += 1;
                     let column = headers.get(idx + 1).unwrap_or("unknown");

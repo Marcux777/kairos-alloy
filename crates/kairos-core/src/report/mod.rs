@@ -20,8 +20,8 @@ pub struct AuditEvent {
 }
 
 pub fn write_audit_jsonl(path: &Path, events: &[AuditEvent]) -> Result<(), String> {
-    let mut file = fs::File::create(path)
-        .map_err(|err| format!("failed to create logs: {}", err))?;
+    let mut file =
+        fs::File::create(path).map_err(|err| format!("failed to create logs: {}", err))?;
     for event in events {
         let line = serde_json::to_string(event)
             .map_err(|err| format!("failed to serialize audit event: {}", err))?;
@@ -33,7 +33,8 @@ pub fn write_audit_jsonl(path: &Path, events: &[AuditEvent]) -> Result<(), Strin
 }
 
 pub fn write_trades_csv(path: &Path, trades: &[Trade]) -> Result<(), String> {
-    let mut output = String::from("timestamp_utc,symbol,side,qty,price,fee,slippage,strategy_id,reason\n");
+    let mut output =
+        String::from("timestamp_utc,symbol,side,qty,price,fee,slippage,strategy_id,reason\n");
     for trade in trades {
         output.push_str(&format!(
             "{},{},{:?},{},{},{},{},{},{}\n",
@@ -52,7 +53,8 @@ pub fn write_trades_csv(path: &Path, trades: &[Trade]) -> Result<(), String> {
 }
 
 pub fn write_equity_csv(path: &Path, points: &[EquityPoint]) -> Result<(), String> {
-    let mut output = String::from("timestamp_utc,equity,cash,position_qty,unrealized_pnl,realized_pnl\n");
+    let mut output =
+        String::from("timestamp_utc,equity,cash,position_qty,unrealized_pnl,realized_pnl\n");
     for point in points {
         output.push_str(&format!(
             "{},{},{},{},{},{}\n",
@@ -104,8 +106,8 @@ pub fn write_summary_json(
     });
     let json = serde_json::to_string_pretty(&json)
         .map_err(|err| format!("failed to serialize summary: {}", err))?;
-    let mut file = fs::File::create(path)
-        .map_err(|err| format!("failed to create summary: {}", err))?;
+    let mut file =
+        fs::File::create(path).map_err(|err| format!("failed to create summary: {}", err))?;
     file.write_all(json.as_bytes())
         .map_err(|err| format!("failed to write summary: {}", err))
 }
@@ -123,7 +125,13 @@ pub fn write_summary_html(
             meta.start.to_string(),
             meta.end.to_string(),
         ),
-        None => ("unknown", "unknown", "unknown", "n/a".to_string(), "n/a".to_string()),
+        None => (
+            "unknown",
+            "unknown",
+            "unknown",
+            "n/a".to_string(),
+            "n/a".to_string(),
+        ),
     };
     let html = format!(
         "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\"/>\n  <title>Kairos Alloy Summary</title>\n  <style>\n    body {{ font-family: Arial, sans-serif; margin: 24px; }}\n    table {{ border-collapse: collapse; }}\n    td, th {{ border: 1px solid #ddd; padding: 8px; }}\n    th {{ text-align: left; }}\n  </style>\n</head>\n<body>\n  <h1>Kairos Alloy Summary</h1>\n  <h2>Run</h2>\n  <table>\n    <tr><th>run_id</th><td>{}</td></tr>\n    <tr><th>symbol</th><td>{}</td></tr>\n    <tr><th>timeframe</th><td>{}</td></tr>\n    <tr><th>start</th><td>{}</td></tr>\n    <tr><th>end</th><td>{}</td></tr>\n  </table>\n  <h2>Metrics</h2>\n  <table>\n    <tr><th>bars_processed</th><td>{}</td></tr>\n    <tr><th>trades</th><td>{}</td></tr>\n    <tr><th>win_rate</th><td>{:.4}</td></tr>\n    <tr><th>net_profit</th><td>{:.4}</td></tr>\n    <tr><th>sharpe</th><td>{:.4}</td></tr>\n    <tr><th>max_drawdown</th><td>{:.4}</td></tr>\n  </table>\n</body>\n</html>\n",
@@ -272,7 +280,7 @@ pub fn write_logs_jsonl(
 mod tests {
     use super::{write_equity_csv, write_logs_jsonl, write_summary_json, write_trades_csv};
     use crate::metrics::MetricsSummary;
-    use crate::types::{EquityPoint, Trade, Side};
+    use crate::types::{EquityPoint, Side, Trade};
     use std::fs;
     use std::path::Path;
 

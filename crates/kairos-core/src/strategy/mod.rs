@@ -252,6 +252,7 @@ impl Strategy for AgentStrategy {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum StrategyKind {
     BuyAndHold(BuyAndHold),
     SimpleSma(SimpleSma),

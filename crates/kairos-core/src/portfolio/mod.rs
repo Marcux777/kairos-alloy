@@ -53,10 +53,7 @@ impl Portfolio {
             return;
         }
 
-        let position = self
-            .positions
-            .iter_mut()
-            .find(|pos| pos.symbol == symbol);
+        let position = self.positions.iter_mut().find(|pos| pos.symbol == symbol);
 
         match side {
             Side::Buy => {

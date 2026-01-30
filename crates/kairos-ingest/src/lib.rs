@@ -1,5 +1,5 @@
-use clap::ValueEnum;
 use chrono::{DateTime, TimeZone, Utc};
+use clap::ValueEnum;
 use reqwest::Client;
 use serde::Deserialize;
 use std::path::Path;
@@ -67,6 +67,7 @@ pub async fn migrate_db(db_url: &str, migrations_path: &Path) -> Result<(), Stri
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn ingest_kucoin(
     db_url: &str,
     symbol: &str,
@@ -223,10 +224,7 @@ async fn fetch_kucoin_spot(
     start: i64,
     end: i64,
 ) -> Result<Vec<Candle>, String> {
-    let url = format!(
-        "{}/api/v1/market/candles",
-        base_url.trim_end_matches('/')
-    );
+    let url = format!("{}/api/v1/market/candles", base_url.trim_end_matches('/'));
     let mut attempts = 0u32;
     loop {
         attempts += 1;
@@ -358,6 +356,7 @@ fn parse_kucoin_rows(rows: &[Vec<String>]) -> Result<Vec<Candle>, String> {
     Ok(candles)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn upsert_candles(
     client: &mut PgClient,
     exchange: &str,
@@ -450,7 +449,11 @@ async fn upsert_candles(
 
 fn parse_time_input(value: &str) -> Result<DateTime<Utc>, String> {
     if let Ok(ts) = value.parse::<i64>() {
-        let seconds = if ts > 1_000_000_000_000 { ts / 1000 } else { ts };
+        let seconds = if ts > 1_000_000_000_000 {
+            ts / 1000
+        } else {
+            ts
+        };
         return Ok(Utc
             .timestamp_opt(seconds, 0)
             .single()
@@ -492,4 +495,3 @@ mod tests {
         assert_eq!(futures.seconds, 60);
     }
 }
-

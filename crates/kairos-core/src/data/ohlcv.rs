@@ -31,7 +31,10 @@ pub struct OhlcvRecord {
     pub volume: f64,
 }
 
-pub fn data_quality_from_bars(bars: &[Bar], expected_step_seconds: Option<i64>) -> DataQualityReport {
+pub fn data_quality_from_bars(
+    bars: &[Bar],
+    expected_step_seconds: Option<i64>,
+) -> DataQualityReport {
     let mut report = DataQualityReport::default();
     if bars.is_empty() {
         return report;

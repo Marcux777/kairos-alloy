@@ -114,6 +114,16 @@ Subir o PostgreSQL (Docker separado):
 docker compose up -d db
 ```
 
+### UID/GID (evitar arquivos como root)
+
+Se você usa bind mount do repo (padrão do `docker compose`) e o container roda como root, é comum gerar arquivos no host com owner `root` (por exemplo `target/`), quebrando builds/edição fora do container.  
+Para evitar isso, defina `KAIROS_UID`/`KAIROS_GID` (veja `.env.example`) e rebuild a imagem:
+
+```bash
+cp .env.example .env
+docker compose build dev
+```
+
 Build da imagem:
 
 ```bash

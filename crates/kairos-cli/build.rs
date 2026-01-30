@@ -8,7 +8,10 @@ fn main() {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs().to_string())
         .unwrap_or_else(|_| "0".to_string());
-    println!("cargo:rustc-env=KAIROS_BUILD_UNIX_EPOCH={}", build_unix_epoch);
+    println!(
+        "cargo:rustc-env=KAIROS_BUILD_UNIX_EPOCH={}",
+        build_unix_epoch
+    );
 
     let target = std::env::var("TARGET").unwrap_or_else(|_| "unknown".to_string());
     println!("cargo:rustc-env=KAIROS_TARGET={}", target);
@@ -32,4 +35,3 @@ fn main() {
         .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=KAIROS_GIT_SHA={}", git_sha);
 }
-

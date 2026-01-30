@@ -2,7 +2,7 @@ use kairos_ingest::{ingest_kucoin, migrate_db, Market};
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -42,13 +42,11 @@ impl MockKucoinServer {
         let stop_clone = stop.clone();
 
         let handle = thread::spawn(move || {
-            listener
-                .set_nonblocking(true)
-                .expect("nonblocking");
+            listener.set_nonblocking(true).expect("nonblocking");
             while !stop_clone.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
-                        if let Err(_) = handle_connection(&mut stream, &candles_json) {
+                        if handle_connection(&mut stream, &candles_json).is_err() {
                             // ignore
                         }
                     }
@@ -133,15 +131,16 @@ fn kucoin_spot_payload() -> String {
     data.trim().to_string()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_config(
-    dir: &PathBuf,
+    dir: &Path,
     run_id: &str,
     symbol: &str,
     timeframe: &str,
     db_url: &str,
     exchange: &str,
     market: &str,
-    sentiment_path: Option<&PathBuf>,
+    sentiment_path: Option<&Path>,
     paper_replay_scale: Option<u64>,
 ) -> PathBuf {
     let mut toml = String::new();
@@ -165,7 +164,9 @@ fn write_config(
     toml.push('\n');
 
     toml.push_str("[costs]\nfee_bps = 10.0\nslippage_bps = 5.0\n\n");
-    toml.push_str("[risk]\nmax_position_qty = 1.0\nmax_drawdown_pct = 0.90\nmax_exposure_pct = 1.00\n\n");
+    toml.push_str(
+        "[risk]\nmax_position_qty = 1.0\nmax_drawdown_pct = 0.90\nmax_exposure_pct = 1.00\n\n",
+    );
     toml.push_str("[orders]\nsize_mode = \"qty\"\n\n");
 
     toml.push_str("[features]\n");
@@ -201,7 +202,7 @@ fn write_config(
     config_path
 }
 
-fn write_sentiment_csv(dir: &PathBuf, name: &str) -> PathBuf {
+fn write_sentiment_csv(dir: &Path, name: &str) -> PathBuf {
     let path = dir.join(name);
     let contents = "timestamp_utc,score,volume_mencoes\n\
 2024-01-01T00:00:00Z,0.1,10\n\
@@ -211,7 +212,7 @@ fn write_sentiment_csv(dir: &PathBuf, name: &str) -> PathBuf {
     path
 }
 
-fn write_sentiment_json(dir: &PathBuf, name: &str) -> PathBuf {
+fn write_sentiment_json(dir: &Path, name: &str) -> PathBuf {
     let path = dir.join(name);
     let contents = r#"
 [
@@ -279,7 +280,7 @@ async fn prd20_e2e_ingest_then_backtest_csv_sentiment() {
         &db_url,
         &exchange,
         "spot",
-        Some(&sentiment_path),
+        Some(sentiment_path.as_path()),
         None,
     );
 
@@ -353,7 +354,7 @@ async fn prd20_smoke_paper_json_sentiment() {
         &db_url,
         &exchange,
         "spot",
-        Some(&sentiment_path),
+        Some(sentiment_path.as_path()),
         Some(100_000),
     );
 
@@ -376,4 +377,3 @@ async fn prd20_smoke_paper_json_sentiment() {
     assert!(run_dir.join("config_snapshot.toml").exists());
     assert!(run_dir.join("logs.jsonl").exists());
 }
-

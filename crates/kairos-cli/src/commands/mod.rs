@@ -5,8 +5,7 @@ use kairos_core::market_data::{MarketDataSource, VecBarSource};
 use kairos_core::metrics::MetricsConfig;
 use kairos_core::report::{
     read_equity_csv, read_trades_csv, recompute_summary, write_audit_jsonl, write_equity_csv,
-    write_summary_html, write_summary_json, write_trades_csv, AuditEvent,
-    SummaryMeta,
+    write_summary_html, write_summary_json, write_trades_csv, AuditEvent, SummaryMeta,
 };
 use kairos_core::risk::RiskLimits;
 use kairos_core::strategy::{AgentStrategy, BuyAndHold, HoldStrategy, SimpleSma, StrategyKind};
@@ -17,20 +16,28 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 pub enum Command {
-    Backtest { config: PathBuf, out: Option<PathBuf> },
+    Backtest {
+        config: PathBuf,
+        out: Option<PathBuf>,
+    },
     Bench {
         bars: usize,
         step_seconds: i64,
         mode: String,
         json: bool,
     },
-    Paper { config: PathBuf, out: Option<PathBuf> },
+    Paper {
+        config: PathBuf,
+        out: Option<PathBuf>,
+    },
     Validate {
         config: PathBuf,
         strict: bool,
         out: Option<PathBuf>,
     },
-    Report { input: PathBuf },
+    Report {
+        input: PathBuf,
+    },
 }
 
 pub fn run(command: Command) -> Result<(), String> {
@@ -109,7 +116,14 @@ fn run_bench(bars: usize, step_seconds: i64, mode: String, json: bool) -> Result
         max_exposure_pct: 1.0,
     };
 
-    let run_id = format!("bench_{}_{}", match bench_mode { BenchMode::Engine => "engine", BenchMode::Features => "features" }, bars);
+    let run_id = format!(
+        "bench_{}_{}",
+        match bench_mode {
+            BenchMode::Engine => "engine",
+            BenchMode::Features => "features",
+        },
+        bars
+    );
     let size_mode = kairos_core::backtest::OrderSizeMode::Quantity;
 
     let start = Instant::now();
@@ -192,7 +206,7 @@ fn run_bench(bars: usize, step_seconds: i64, mode: String, json: bool) -> Result
             "bars_per_sec": bars_per_sec,
             "size_mode": "qty",
         });
-        println!("{}", line.to_string());
+        println!("{}", line);
     } else {
         println!(
             "bench: mode={} bars={} elapsed_ms={} bars_per_sec={:.2}",
@@ -206,7 +220,10 @@ fn run_bench(bars: usize, step_seconds: i64, mode: String, json: bool) -> Result
         );
         println!(
             "bench: trades={} net_profit={:.4} sharpe={:.4} max_drawdown={:.4}",
-            results.summary.trades, results.summary.net_profit, results.summary.sharpe, results.summary.max_drawdown
+            results.summary.trades,
+            results.summary.net_profit,
+            results.summary.sharpe,
+            results.summary.max_drawdown
         );
     }
 
@@ -241,18 +258,18 @@ fn run_validate(config_path: PathBuf, strict: bool, out: Option<PathBuf>) -> Res
     let source_rows = source_bars.len();
     let (ohlcv_report, ohlcv_source_report, effective_rows, resampled) =
         if source_timeframe_label != timeframe_label {
-        if source_step > expected_step {
-            return Err(format!(
+            if source_step > expected_step {
+                return Err(format!(
                 "cannot resample OHLCV: source timeframe ({}) is larger than run timeframe ({})",
                 source_timeframe_label, timeframe_label
             ));
-        }
-        let resampled_bars = ohlcv::resample_bars(&source_bars, expected_step)?;
-        let report = ohlcv::data_quality_from_bars(&resampled_bars, Some(expected_step));
-        (report, Some(source_report), resampled_bars.len(), true)
-    } else {
-        (source_report, None, source_rows, false)
-    };
+            }
+            let resampled_bars = ohlcv::resample_bars(&source_bars, expected_step)?;
+            let report = ohlcv::data_quality_from_bars(&resampled_bars, Some(expected_step));
+            (report, Some(source_report), resampled_bars.len(), true)
+        } else {
+            (source_report, None, source_rows, false)
+        };
 
     if let Some(source) = &ohlcv_source_report {
         println!(
@@ -310,8 +327,8 @@ fn run_validate(config_path: PathBuf, strict: bool, out: Option<PathBuf>) -> Res
     let max_sentiment_invalid = limits.and_then(|l| l.max_sentiment_invalid).unwrap_or(0);
     let max_sentiment_dropped = limits.and_then(|l| l.max_sentiment_dropped).unwrap_or(0);
 
-    if strict {
-        if ohlcv_report.gaps > max_gaps
+    if strict
+        && (ohlcv_report.gaps > max_gaps
             || ohlcv_report.duplicates > max_duplicates
             || ohlcv_report.out_of_order > max_out_of_order
             || ohlcv_report.invalid_close > max_invalid_close
@@ -319,10 +336,9 @@ fn run_validate(config_path: PathBuf, strict: bool, out: Option<PathBuf>) -> Res
             || s_out_of_order > max_out_of_order
             || s_missing > max_sentiment_missing
             || s_invalid > max_sentiment_invalid
-            || s_dropped > max_sentiment_dropped
-        {
-            return Err("strict validation failed: data quality limits exceeded".to_string());
-        }
+            || s_dropped > max_sentiment_dropped)
+    {
+        return Err("strict validation failed: data quality limits exceeded".to_string());
     }
 
     if let Some(out_path) = out {
@@ -480,7 +496,11 @@ fn run_report(input: PathBuf) -> Result<(), String> {
         config_snapshot.as_ref(),
     )?;
     if report_html {
-        write_summary_html(input.join("summary.html").as_path(), &summary, meta.as_ref())?;
+        write_summary_html(
+            input.join("summary.html").as_path(),
+            &summary,
+            meta.as_ref(),
+        )?;
     }
 
     let end_ts = equity.last().map(|p| p.timestamp).unwrap_or(0);
@@ -594,9 +614,7 @@ fn print_config_summary(command: &str, config: &Config, out: Option<&PathBuf>) {
     );
     println!(
         "risk: max_position_qty={}, max_drawdown_pct={}, max_exposure_pct={}",
-        config.risk.max_position_qty,
-        config.risk.max_drawdown_pct,
-        config.risk.max_exposure_pct
+        config.risk.max_position_qty, config.risk.max_drawdown_pct, config.risk.max_exposure_pct
     );
     println!(
         "orders: size_mode={}",
@@ -795,7 +813,12 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
             "log" => features::ReturnMode::Log,
             _ => features::ReturnMode::Pct,
         },
-        sma_windows: config.features.sma_windows.iter().map(|w| *w as usize).collect(),
+        sma_windows: config
+            .features
+            .sma_windows
+            .iter()
+            .map(|w| *w as usize)
+            .collect(),
         volatility_windows: config
             .features
             .volatility_windows
@@ -1261,7 +1284,12 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
             "log" => features::ReturnMode::Log,
             _ => features::ReturnMode::Pct,
         },
-        sma_windows: config.features.sma_windows.iter().map(|w| *w as usize).collect(),
+        sma_windows: config
+            .features
+            .sma_windows
+            .iter()
+            .map(|w| *w as usize)
+            .collect(),
         volatility_windows: config
             .features
             .volatility_windows
@@ -1422,11 +1450,7 @@ struct RealtimeBarSource {
 }
 
 impl RealtimeBarSource {
-    fn new(
-        bars: Vec<kairos_core::types::Bar>,
-        sleep_seconds: i64,
-        replay_scale: u64,
-    ) -> Self {
+    fn new(bars: Vec<kairos_core::types::Bar>, sleep_seconds: i64, replay_scale: u64) -> Self {
         let scaled = if replay_scale == 0 {
             0
         } else {
@@ -1467,18 +1491,21 @@ impl MarketDataSource for RealtimeBarSource {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_timeframe_label, parse_action_type, parse_duration_like, run_backtest, run_validate};
+    use super::{
+        normalize_timeframe_label, parse_action_type, parse_duration_like, run_backtest,
+        run_validate,
+    };
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
-    fn write_file(path: &PathBuf, contents: &str) {
+    fn write_file(path: &Path, contents: &str) {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
         fs::write(path, contents).expect("write file");
     }
 
-    fn sample_config(tmp_dir: &PathBuf, db_url: &str) -> PathBuf {
+    fn sample_config(tmp_dir: &Path, db_url: &str) -> PathBuf {
         let config_path = tmp_dir.join("config.toml");
         let toml_contents = format!(
             "\

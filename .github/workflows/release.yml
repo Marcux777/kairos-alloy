@@ -9,9 +9,63 @@ permissions:
   contents: write
 
 jobs:
+  verify:
+    name: Verify (fmt + clippy + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+          components: rustfmt, clippy
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify tag matches crate versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "release version: ${VERSION}"
+
+          cli_ver="$(python - <<'PY'
+          import tomllib, pathlib
+          data = tomllib.loads(pathlib.Path("crates/kairos-cli/Cargo.toml").read_text(encoding="utf-8"))
+          print(data["package"]["version"])
+          PY
+          )"
+          ingest_ver="$(python - <<'PY'
+          import tomllib, pathlib
+          data = tomllib.loads(pathlib.Path("crates/kairos-ingest/Cargo.toml").read_text(encoding="utf-8"))
+          print(data["package"]["version"])
+          PY
+          )"
+
+          test "${cli_ver}" = "${VERSION}" || (echo "kairos-cli version ${cli_ver} != ${VERSION}" && exit 1)
+          test "${ingest_ver}" = "${VERSION}" || (echo "kairos-ingest version ${ingest_ver} != ${VERSION}" && exit 1)
+
+      - name: Format (rustfmt)
+        shell: bash
+        run: cargo fmt --all -- --check
+
+      - name: Lint (clippy)
+        shell: bash
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        shell: bash
+        run: cargo test --workspace --locked
+
   build:
     name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    needs: [verify]
     strategy:
       fail-fast: false
       matrix:
@@ -38,29 +92,6 @@ jobs:
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
-
-      - name: Verify tag matches crate versions
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
-          echo "release version: ${VERSION}"
-
-          cli_ver="$(python - <<'PY'
-import tomllib, pathlib
-data = tomllib.loads(pathlib.Path("crates/kairos-cli/Cargo.toml").read_text(encoding="utf-8"))
-print(data["package"]["version"])
-PY
-)"
-          ingest_ver="$(python - <<'PY'
-import tomllib, pathlib
-data = tomllib.loads(pathlib.Path("crates/kairos-ingest/Cargo.toml").read_text(encoding="utf-8"))
-print(data["package"]["version"])
-PY
-)"
-
-          test "${cli_ver}" = "${VERSION}" || (echo "kairos-cli version ${cli_ver} != ${VERSION}" && exit 1)
-          test "${ingest_ver}" = "${VERSION}" || (echo "kairos-ingest version ${ingest_ver} != ${VERSION}" && exit 1)
 
       - name: Build (release)
         shell: bash

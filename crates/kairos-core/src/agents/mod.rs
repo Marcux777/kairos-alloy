@@ -1,9 +1,9 @@
 use crate::types::{Action, ActionType};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use std::time::Instant;
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PortfolioState {
@@ -158,7 +158,8 @@ impl AgentClient {
                 attempts,
                 duration_ms: start.elapsed().as_millis() as u64,
                 status: last_status,
-                error: last_error.or_else(|| Some("agent request failed after retries".to_string())),
+                error: last_error
+                    .or_else(|| Some("agent request failed after retries".to_string())),
             },
             response: None,
         }
@@ -203,7 +204,7 @@ fn validate_action_response(response: &ActionResponse) -> Result<(), String> {
         return Err(format!("invalid size: {}", response.size));
     }
     if let Some(confidence) = response.confidence {
-        if !confidence.is_finite() || confidence < 0.0 || confidence > 1.0 {
+        if !confidence.is_finite() || !(0.0..=1.0).contains(&confidence) {
             return Err(format!("invalid confidence: {}", confidence));
         }
     }

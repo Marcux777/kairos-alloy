@@ -97,7 +97,11 @@ fn main() {
             json,
         },
         CliCommand::Paper { config, out } => Command::Paper { config, out },
-        CliCommand::Validate { config, strict, out } => Command::Validate {
+        CliCommand::Validate {
+            config,
+            strict,
+            out,
+        } => Command::Validate {
             config,
             strict,
             out,
@@ -114,7 +118,8 @@ fn main() {
 fn print_build_info() {
     let version = env!("CARGO_PKG_VERSION");
     let git_sha = option_env!("KAIROS_GIT_SHA").unwrap_or("unknown");
-    let build_unix_epoch = option_env!("KAIROS_BUILD_UNIX_EPOCH").and_then(|v| v.parse::<u64>().ok());
+    let build_unix_epoch =
+        option_env!("KAIROS_BUILD_UNIX_EPOCH").and_then(|v| v.parse::<u64>().ok());
     let rustc = option_env!("KAIROS_RUSTC_VERSION").unwrap_or("unknown");
     let target = option_env!("KAIROS_TARGET").unwrap_or("unknown");
 
@@ -127,5 +132,5 @@ fn print_build_info() {
         "target": target,
     });
 
-    println!("{}", info.to_string());
+    println!("{}", info);
 }

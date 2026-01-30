@@ -47,6 +47,7 @@ where
     S: Strategy,
     D: MarketDataSource,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         run_id: String,
         strategy: S,
@@ -198,7 +199,7 @@ where
         let requested_size = action.size;
 
         match action.action_type {
-            ActionType::Hold => return,
+            ActionType::Hold => (),
             ActionType::Buy => {
                 if action.size <= 0.0 {
                     self.audit_events.push(order_reject_event(
@@ -242,10 +243,10 @@ where
                         return;
                     }
                 };
-                if !self.risk_limits.allows_position(
-                    self.portfolio.position_qty(&bar.symbol),
-                    qty,
-                ) {
+                if !self
+                    .risk_limits
+                    .allows_position(self.portfolio.position_qty(&bar.symbol), qty)
+                {
                     self.audit_events.push(order_reject_event(
                         &self.run_id,
                         bar.timestamp,
@@ -258,13 +259,9 @@ where
                     ));
                     return;
                 }
-                let next_exposure =
-                    (self.portfolio.position_qty(&bar.symbol) + qty) * bar.close;
+                let next_exposure = (self.portfolio.position_qty(&bar.symbol) + qty) * bar.close;
                 let equity = self.portfolio.equity(&bar.symbol, bar.close);
-                if !self
-                    .risk_limits
-                    .allows_exposure(equity, next_exposure)
-                {
+                if !self.risk_limits.allows_exposure(equity, next_exposure) {
                     self.audit_events.push(order_reject_event(
                         &self.run_id,
                         bar.timestamp,
@@ -427,7 +424,7 @@ where
         match self.size_mode {
             OrderSizeMode::Quantity => Ok(size),
             OrderSizeMode::PctEquity => {
-                if size < 0.0 || size > 1.0 {
+                if !(0.0..=1.0).contains(&size) {
                     return Err("pct_out_of_range".to_string());
                 }
                 let equity = self.portfolio.equity(&bar.symbol, bar.close);
@@ -452,6 +449,7 @@ where
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn order_reject_event(
     run_id: &str,
     timestamp: i64,
@@ -484,12 +482,12 @@ fn order_reject_event(
 #[cfg(test)]
 mod tests {
     use super::BacktestRunner;
+    use super::OrderSizeMode;
     use crate::market_data::MarketDataSource;
     use crate::metrics::MetricsConfig;
     use crate::risk::RiskLimits;
     use crate::strategy::Strategy;
     use crate::types::Bar;
-    use super::OrderSizeMode;
 
     struct DummyDataSource {
         bars: Vec<Bar>,

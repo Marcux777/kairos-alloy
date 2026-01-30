@@ -20,6 +20,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        KAIROS_UID: ${KAIROS_UID:-1000}
+        KAIROS_GID: ${KAIROS_GID:-1000}
+        KAIROS_USER: ${KAIROS_USER:-kairos}
     depends_on:
       db:
         condition: service_healthy
