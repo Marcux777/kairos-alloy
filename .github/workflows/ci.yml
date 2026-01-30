@@ -7,6 +7,18 @@ on:
   pull_request:
 
 jobs:
+  security:
+    name: Security (cargo-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: RustSec Audit
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   test:
     name: Rust (fmt + clippy + tests)
     runs-on: ubuntu-latest
@@ -34,4 +46,3 @@ jobs:
       - name: Test
         shell: bash
         run: cargo test --workspace --locked
-

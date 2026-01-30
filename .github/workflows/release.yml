@@ -50,6 +50,11 @@ jobs:
           test "${cli_ver}" = "${VERSION}" || (echo "kairos-cli version ${cli_ver} != ${VERSION}" && exit 1)
           test "${ingest_ver}" = "${VERSION}" || (echo "kairos-ingest version ${ingest_ver} != ${VERSION}" && exit 1)
 
+      - name: RustSec Audit
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Format (rustfmt)
         shell: bash
         run: cargo fmt --all -- --check
