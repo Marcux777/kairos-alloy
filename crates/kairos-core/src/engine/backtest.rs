@@ -150,8 +150,8 @@ where
             None => return,
         };
 
+        let fee_rate = self.fee_bps / 10_000.0;
         let mut price = bar.open;
-        let slippage_cost = price * order.quantity * (self.slippage_bps / 10_000.0);
         match order.side {
             Side::Buy => {
                 price *= 1.0 + self.slippage_bps / 10_000.0;
@@ -161,15 +161,112 @@ where
             }
         }
 
-        let fee = price * order.quantity * (self.fee_bps / 10_000.0);
+        let filled_qty = match order.side {
+            Side::Buy => {
+                if price <= 0.0 || !price.is_finite() {
+                    self.audit_events.push(AuditEvent {
+                        run_id: self.run_id.clone(),
+                        timestamp: bar.timestamp,
+                        stage: "order".to_string(),
+                        symbol: Some(self.symbol.clone()),
+                        action: "reject".to_string(),
+                        error: Some("price_not_positive".to_string()),
+                        details: json!({
+                            "side": "BUY",
+                            "price": price,
+                            "order_id": order.id,
+                            "requested_qty": order.quantity,
+                        }),
+                    });
+                    return;
+                }
+
+                // Prevent negative cash (cash account). Clamp qty to what's affordable at fill price.
+                let denom = price * (1.0 + fee_rate);
+                if denom <= 0.0 || !denom.is_finite() {
+                    self.audit_events.push(AuditEvent {
+                        run_id: self.run_id.clone(),
+                        timestamp: bar.timestamp,
+                        stage: "order".to_string(),
+                        symbol: Some(self.symbol.clone()),
+                        action: "reject".to_string(),
+                        error: Some("invalid_cost_basis".to_string()),
+                        details: json!({
+                            "side": "BUY",
+                            "price": price,
+                            "fee_rate": fee_rate,
+                            "order_id": order.id,
+                            "requested_qty": order.quantity,
+                        }),
+                    });
+                    return;
+                }
+
+                let cash = self.portfolio.cash();
+                let max_qty = if cash > 0.0 && cash.is_finite() {
+                    cash / denom
+                } else {
+                    0.0
+                };
+                let qty = order.quantity.min(max_qty).max(0.0);
+
+                if qty <= 0.0 {
+                    self.audit_events.push(AuditEvent {
+                        run_id: self.run_id.clone(),
+                        timestamp: bar.timestamp,
+                        stage: "order".to_string(),
+                        symbol: Some(self.symbol.clone()),
+                        action: "reject".to_string(),
+                        error: Some("insufficient_cash".to_string()),
+                        details: json!({
+                            "side": "BUY",
+                            "price": price,
+                            "fee_rate": fee_rate,
+                            "cash": cash,
+                            "order_id": order.id,
+                            "requested_qty": order.quantity,
+                            "max_qty": max_qty,
+                        }),
+                    });
+                    return;
+                }
+
+                if qty + 1e-12 < order.quantity {
+                    self.audit_events.push(AuditEvent {
+                        run_id: self.run_id.clone(),
+                        timestamp: bar.timestamp,
+                        stage: "order".to_string(),
+                        symbol: Some(self.symbol.clone()),
+                        action: "partial_fill".to_string(),
+                        error: Some("insufficient_cash".to_string()),
+                        details: json!({
+                            "side": "BUY",
+                            "price": price,
+                            "fee_rate": fee_rate,
+                            "cash": cash,
+                            "order_id": order.id,
+                            "requested_qty": order.quantity,
+                            "filled_qty": qty,
+                            "max_qty": max_qty,
+                        }),
+                    });
+                }
+
+                qty
+            }
+            Side::Sell => order.quantity,
+        };
+
+        let slippage_cost = bar.open * filled_qty * (self.slippage_bps / 10_000.0);
+        let fee = price * filled_qty * fee_rate;
         self.portfolio
-            .apply_fill(&self.symbol, order.side, order.quantity, price, fee);
+            .apply_fill(&self.symbol, order.side, filled_qty, price, fee);
 
         self.metrics.record_trade(Trade {
             timestamp: bar.timestamp,
             symbol: self.symbol.clone(),
             side: order.side,
-            quantity: order.quantity,
+            quantity: filled_qty,
             price,
             fee,
             slippage: slippage_cost,
@@ -185,7 +282,7 @@ where
             action: format!("{:?}", order.side),
             error: None,
             details: json!({
-                "qty": order.quantity,
+                "qty": filled_qty,
                 "price": price,
                 "fee": fee,
                 "slippage": slippage_cost,

@@ -21,10 +21,12 @@
     "config_snapshot": { "type": ["object", "null"] },
     "bars_processed": { "type": "integer", "minimum": 0 },
     "trades": { "type": "integer", "minimum": 0 },
-    "win_rate": { "type": "number" },
+    "win_rate": {
+      "type": "number",
+      "description": "Win rate por trade de SELL (fração de SELL trades com PnL realizado > 0)."
+    },
     "net_profit": { "type": "number" },
     "sharpe": { "type": "number" },
     "max_drawdown": { "type": "number" }
   }
 }
-

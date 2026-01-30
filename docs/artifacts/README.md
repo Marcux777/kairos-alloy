@@ -30,6 +30,9 @@ timestamp_utc,equity,cash,position_qty,unrealized_pnl,realized_pnl
 Schema:
 - `docs/artifacts/summary.schema.json`
 
+Nota:
+- `win_rate` é calculado por trade de SELL (fração de SELL fills com PnL realizado > 0).
+
 ## logs.jsonl
 
 Audit log entries (one JSON object per line). Common fields:

@@ -17,6 +17,20 @@ cargo build
 cargo run -p kairos-cli
 ```
 
+## Desenvolvimento sem Docker
+
+Se você não tiver Docker disponível (por exemplo WSL sem integração do Docker Desktop), você ainda consegue:
+
+```bash
+rustup toolchain install 1.93.0
+rustup default 1.93.0
+rustup component add rustfmt clippy
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Para rodar `kairos-ingest`/`validate`/`backtest` com dados reais, você precisa de um PostgreSQL acessível e `db.url` ajustado no `configs/*.toml`.
+
 ## Instalacao via Releases
 
 Os binarios oficiais sao publicados no GitHub Releases (Linux/Windows) com checksums SHA256.
@@ -122,6 +136,14 @@ Para evitar isso, defina `KAIROS_UID`/`KAIROS_GID` (veja `.env.example`) e rebui
 ```bash
 cp .env.example .env
 docker compose build dev
+```
+
+### Limpeza de diretórios `*.root-owned`
+
+Se você já rodou o repo com container como root, podem existir cópias `*.root-owned/` (ex.: `target.root-owned/`). Elas são ignoradas pelo git, mas podem ser removidas do filesystem:
+
+```bash
+sudo rm -rf .github.root-owned .serena.root-owned configs.root-owned crates.root-owned docs.root-owned migrations.root-owned scripts.root-owned tests.root-owned tools.root-owned target.root-owned
 ```
 
 Build da imagem:

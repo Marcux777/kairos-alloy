@@ -146,6 +146,13 @@ pub fn resample_bars(bars: &[Bar], target_step_seconds: i64) -> Result<Vec<Bar>,
 }
 
 pub fn load_csv(path: &Path) -> Result<(Vec<Bar>, DataQualityReport), String> {
+    load_csv_with_step(path, None)
+}
+
+pub fn load_csv_with_step(
+    path: &Path,
+    expected_step_seconds: Option<i64>,
+) -> Result<(Vec<Bar>, DataQualityReport), String> {
     let file = File::open(path)
         .map_err(|err| format!("failed to open OHLCV CSV {}: {}", path.display(), err))?;
     let mut reader = csv::Reader::from_reader(file);
@@ -154,6 +161,7 @@ pub fn load_csv(path: &Path) -> Result<(Vec<Bar>, DataQualityReport), String> {
     let mut report = DataQualityReport::default();
     let mut last_ts: Option<i64> = None;
     let mut max_gap: Option<i64> = None;
+    let step = expected_step_seconds.unwrap_or(1).max(1);
 
     for result in reader.deserialize::<OhlcvRecord>() {
         let record = result.map_err(|err| format!("failed to parse CSV row: {}", err))?;
@@ -179,7 +187,7 @@ pub fn load_csv(path: &Path) -> Result<(Vec<Bar>, DataQualityReport), String> {
                 }
             } else if timestamp > prev {
                 let diff = timestamp - prev;
-                if diff > 1 {
+                if diff > step {
                     report.gaps += 1;
                     report.gap_count += 1;
                     if report.first_gap.is_none() {
@@ -312,11 +320,22 @@ fn validate_table_name(table: &str) -> Result<(), String> {
     if table.is_empty() {
         return Err("table name is empty".to_string());
     }
-    let valid = table
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '.');
-    if !valid {
+    let parts: Vec<&str> = table.split('.').collect();
+    if parts.is_empty() || parts.len() > 2 {
         return Err(format!("invalid table name: {table}"));
+    }
+    for part in parts {
+        if part.is_empty() {
+            return Err(format!("invalid table name: {table}"));
+        }
+        let mut chars = part.chars();
+        let first = chars.next().unwrap();
+        if !(first.is_ascii_alphabetic() || first == '_') {
+            return Err(format!("invalid table name: {table}"));
+        }
+        if !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+            return Err(format!("invalid table name: {table}"));
+        }
     }
     Ok(())
 }

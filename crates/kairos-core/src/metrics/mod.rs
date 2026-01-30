@@ -145,22 +145,60 @@ impl MetricsState {
     }
 
     fn win_rate(&self) -> f64 {
-        if self.equity_curve.len() < 2 {
-            return 0.0;
-        }
+        // Win rate per SELL trade, based on realized PnL computed from the trade stream.
+        // For long-only strategies, we count only SELL fills as "closed" outcomes.
+        let mut position_qty = 0.0f64;
+        let mut avg_cost = 0.0f64; // average cost per unit, inclusive of BUY fees
+
         let mut wins = 0usize;
         let mut total = 0usize;
-        for pair in self.equity_curve.windows(2) {
-            let prev = pair[0].equity;
-            let curr = pair[1].equity;
-            if prev <= 0.0 {
+
+        for trade in &self.trades {
+            if !trade.quantity.is_finite() || trade.quantity <= 0.0 {
                 continue;
             }
-            total += 1;
-            if curr > prev {
-                wins += 1;
+            if !trade.price.is_finite() || trade.price <= 0.0 {
+                continue;
+            }
+            if !trade.fee.is_finite() || trade.fee < 0.0 {
+                continue;
+            }
+
+            match trade.side {
+                crate::types::Side::Buy => {
+                    let cost = trade.quantity * trade.price + trade.fee;
+                    let new_qty = position_qty + trade.quantity;
+                    if new_qty > 0.0 && cost.is_finite() {
+                        let total_cost = avg_cost * position_qty + cost;
+                        avg_cost = total_cost / new_qty;
+                        position_qty = new_qty;
+                    }
+                }
+                crate::types::Side::Sell => {
+                    if position_qty <= 0.0 {
+                        continue;
+                    }
+                    let sell_qty = trade.quantity.min(position_qty);
+                    if sell_qty <= 0.0 {
+                        continue;
+                    }
+
+                    let proceeds = sell_qty * trade.price - trade.fee;
+                    let pnl = proceeds - sell_qty * avg_cost;
+                    total += 1;
+                    if pnl > 0.0 {
+                        wins += 1;
+                    }
+
+                    position_qty -= sell_qty;
+                    if position_qty <= 0.0 {
+                        position_qty = 0.0;
+                        avg_cost = 0.0;
+                    }
+                }
             }
         }
+
         if total == 0 {
             0.0
         } else {
@@ -173,6 +211,7 @@ impl MetricsState {
 mod tests {
     use super::{MetricsConfig, MetricsState};
     use crate::types::EquityPoint;
+    use crate::types::{Side, Trade};
 
     #[test]
     fn computes_net_profit_and_drawdown() {
@@ -205,5 +244,35 @@ mod tests {
         let summary = metrics.summary();
         assert_eq!(summary.net_profit, 20.0);
         assert!(summary.max_drawdown > 0.0);
+    }
+
+    #[test]
+    fn win_rate_counts_sell_trades() {
+        let mut metrics = MetricsState::new(MetricsConfig::default());
+        metrics.record_trade(Trade {
+            timestamp: 1,
+            symbol: "BTCUSD".to_string(),
+            side: Side::Buy,
+            quantity: 1.0,
+            price: 100.0,
+            fee: 1.0,
+            slippage: 0.0,
+            strategy_id: "test".to_string(),
+            reason: "test".to_string(),
+        });
+        metrics.record_trade(Trade {
+            timestamp: 2,
+            symbol: "BTCUSD".to_string(),
+            side: Side::Sell,
+            quantity: 1.0,
+            price: 120.0,
+            fee: 1.0,
+            slippage: 0.0,
+            strategy_id: "test".to_string(),
+            reason: "test".to_string(),
+        });
+
+        let summary = metrics.summary();
+        assert!(summary.win_rate > 0.99);
     }
 }
