@@ -34,13 +34,33 @@ jobs:
         if: matrix.language == 'rust'
         uses: github/codeql-action/autobuild@v3
 
+      - name: Detect code scanning enabled
+        id: code_scanning
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          url="https://api.github.com/repos/${GITHUB_REPOSITORY}/code-scanning/alerts?per_page=1"
+          status="$(curl -sS -o /tmp/code-scanning.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "${url}" || true)"
+          if [ "${status}" = "200" ]; then
+            echo "enabled=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "enabled=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Analyze
         uses: github/codeql-action/analyze@v3
-        continue-on-error: true
+        continue-on-error: ${{ steps.code_scanning.outputs.enabled != 'true' }}
 
       - name: Note about code scanning uploads
         if: always()
         shell: bash
         run: |
-          echo "If CodeQL upload fails with: 'Code scanning is not enabled for this repository', enable it in:"
-          echo "Settings -> Code security and analysis -> Code scanning"
+          if [ "${{ steps.code_scanning.outputs.enabled }}" != "true" ]; then
+            echo "Code scanning is not enabled for this repository."
+            echo "Enable it in: Settings -> Code security and analysis -> Code scanning"
+          fi

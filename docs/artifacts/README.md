@@ -25,6 +25,10 @@ Header:
 timestamp_utc,equity,cash,position_qty,unrealized_pnl,realized_pnl
 ```
 
+Nota:
+- `realized_pnl` é o PnL realizado acumulado do portfólio.
+- O custo-base (`position_avg_price`) é tratado como **incluindo fees de BUY** (cost basis por unidade).
+
 ## summary.json
 
 Schema:

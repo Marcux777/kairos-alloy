@@ -32,6 +32,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 Para rodar `kairos-ingest`/`validate`/`backtest` com dados reais, você precisa de um PostgreSQL acessível e `db.url` ajustado no `configs/*.toml`.
 
+## Segurança (checks locais)
+
+Para rodar os mesmos “gates” de supply-chain/segurança localmente (quando aplicável):
+
+```bash
+./scripts/security-check.sh
+```
+
 ## Instalacao via Releases
 
 Os binarios oficiais sao publicados no GitHub Releases (Linux/Windows) com checksums SHA256.
