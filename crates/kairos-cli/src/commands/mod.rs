@@ -166,4 +166,3 @@ feature_version = \"v1\"\n",
         assert!(run_dir.join("config_snapshot.toml").exists());
     }
 }
-

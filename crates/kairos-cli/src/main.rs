@@ -1,5 +1,6 @@
 mod commands;
 mod config;
+mod infra;
 mod output;
 
 use clap::{CommandFactory, Parser, Subcommand};
