@@ -176,6 +176,61 @@ mod tests {
     }
 
     #[test]
+    fn parse_config_rejects_malformed_toml() {
+        let err = toml::from_str::<Config>("[run\nrun_id = 1").expect_err("malformed");
+        let msg = err.to_string();
+        assert!(!msg.is_empty());
+    }
+
+    #[test]
+    fn parse_config_rejects_unknown_fields() {
+        let toml_str = r#"
+[run]
+run_id = "x"
+symbol = "BTCUSD"
+timeframe = "1m"
+initial_capital = 100.0
+
+[db]
+ohlcv_table = "ohlcv_candles"
+exchange = "kucoin"
+market = "spot"
+
+[paths]
+out_dir = "runs/"
+
+[costs]
+fee_bps = 0.0
+slippage_bps = 0.0
+
+[risk]
+max_position_qty = 1.0
+max_drawdown_pct = 1.0
+max_exposure_pct = 1.0
+
+[features]
+return_mode = "pct"
+sma_windows = [2]
+rsi_enabled = false
+sentiment_lag = "0s"
+
+[agent]
+mode = "baseline"
+url = "http://127.0.0.1:8000"
+timeout_ms = 200
+retries = 0
+fallback_action = "HOLD"
+api_version = "v1"
+feature_version = "v1"
+
+unknown_field = 123
+"#;
+
+        let err = toml::from_str::<Config>(toml_str).expect_err("unknown field should fail");
+        assert!(err.to_string().to_lowercase().contains("unknown field"));
+    }
+
+    #[test]
     fn parse_minimal_config() {
         let toml_str = r#"
 [run]

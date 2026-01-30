@@ -1,4 +1,5 @@
 pub mod backtesting;
+pub mod benchmarking;
 pub mod config;
 pub mod meta;
 pub mod paper_trading;

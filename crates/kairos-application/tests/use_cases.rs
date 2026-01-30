@@ -412,3 +412,73 @@ html = true
     assert!(*writer.summary_html_written.borrow());
     assert!(writer.audit_written.borrow().unwrap_or(0) >= 2);
 }
+
+#[test]
+fn run_paper_writes_summary_and_snapshot_without_sleep() {
+    let mut config = minimal_config();
+    config.paper = Some(kairos_application::config::PaperConfig {
+        replay_scale: Some(0),
+    });
+    config.agent.mode = AgentMode::Baseline;
+    config.report = Some(kairos_application::config::ReportConfig { html: Some(false) });
+
+    let bars = vec![
+        Bar {
+            symbol: "BTCUSD".to_string(),
+            timestamp: 1,
+            open: 10.0,
+            high: 10.0,
+            low: 10.0,
+            close: 10.0,
+            volume: 10.0,
+        },
+        Bar {
+            symbol: "BTCUSD".to_string(),
+            timestamp: 2,
+            open: 10.0,
+            high: 10.0,
+            low: 10.0,
+            close: 10.0,
+            volume: 10.0,
+        },
+        Bar {
+            symbol: "BTCUSD".to_string(),
+            timestamp: 3,
+            open: 10.0,
+            high: 10.0,
+            low: 10.0,
+            close: 10.0,
+            volume: 10.0,
+        },
+    ];
+
+    let market = FakeMarketDataRepo {
+        bars,
+        report: DataQualityReport::default(),
+    };
+    let sentiment = FakeSentimentRepo;
+    let writer = RecordingWriter::default();
+
+    let config_toml = "[run]\nrun_id=\"test_run\"\n";
+    let out_dir = std::env::temp_dir().join("kairos_app_paper_tests");
+    let run_dir = kairos_application::paper_trading::run_paper(
+        &config,
+        config_toml,
+        Some(out_dir),
+        &market,
+        &sentiment,
+        &writer,
+        None,
+    )
+    .expect("run_paper");
+
+    assert!(run_dir.ends_with("test_run"));
+    assert_eq!(
+        writer.config_snapshot.borrow().as_deref(),
+        Some(config_toml)
+    );
+    let summary_json = writer.summary_written.borrow();
+    let json = summary_json.as_ref().expect("summary json written");
+    assert_eq!(json["summary"]["bars_processed"], 3);
+    assert_eq!(json["meta"]["run_id"], "test_run");
+}

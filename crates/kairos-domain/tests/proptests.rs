@@ -1,5 +1,9 @@
 use kairos_domain::entities::metrics::{MetricsConfig, MetricsState};
+use kairos_domain::entities::risk::RiskLimits;
+use kairos_domain::services::engine::backtest::{BacktestRunner, OrderSizeMode};
 use kairos_domain::services::features::{FeatureBuilder, FeatureConfig, ReturnMode};
+use kairos_domain::services::market_data_source::VecBarSource;
+use kairos_domain::services::strategy::BuyAndHold;
 use kairos_domain::value_objects::bar::Bar;
 use kairos_domain::value_objects::equity_point::EquityPoint;
 use proptest::prelude::*;
@@ -54,5 +58,34 @@ proptest! {
         let summary = state.summary();
         prop_assert!(summary.sharpe.is_finite());
         prop_assert!((0.0..=1.0).contains(&summary.max_drawdown));
+    }
+
+    #[test]
+    fn engine_never_records_negative_cash(prices in prop::collection::vec(0.01f64..10_000.0, 2..80)) {
+        let bars: Vec<Bar> = prices
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(idx, close)| bar(idx as i64 + 1, close))
+            .collect();
+
+        let data = VecBarSource::new(bars);
+        let strategy = BuyAndHold::new(1.0);
+        let mut runner = BacktestRunner::new(
+            "prop_cash".to_string(),
+            strategy,
+            data,
+            RiskLimits::default(),
+            10_000.0,
+            MetricsConfig::default(),
+            0.0,
+            0.0,
+            "BTCUSD".to_string(),
+            OrderSizeMode::PctEquity,
+        );
+        let result = runner.run();
+
+        prop_assert!(!result.equity.is_empty());
+        prop_assert!(result.equity.iter().all(|p| p.cash.is_finite() && p.cash >= -1e-9));
     }
 }
