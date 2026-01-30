@@ -4,4 +4,3 @@ pub struct Position {
     pub quantity: f64,
     pub avg_price: f64,
 }
-

@@ -1,25 +1,24 @@
-use crate::config::{load_config, AgentMode, Config};
+use crate::config::{load_config, load_config_with_source, AgentMode, Config};
 use kairos_application::meta::engine_name;
 use kairos_domain::entities::metrics::MetricsConfig;
 use kairos_domain::entities::risk::RiskLimits;
 use kairos_domain::services::audit::AuditEvent;
-use kairos_domain::services::engine::backtest::{BacktestResults, BacktestRunner};
-use kairos_domain::services::market_data_source::{MarketDataSource, VecBarSource};
-use kairos_domain::services::strategy::{AgentStrategy, BuyAndHold, HoldStrategy, SimpleSma, StrategyKind};
-use kairos_domain::value_objects::equity_point::EquityPoint;
-use kairos_infrastructure::agents::AgentClient;
-use kairos_infrastructure::market_data::ohlcv;
-use kairos_infrastructure::reporting::{
-    read_equity_csv, read_trades_csv, recompute_summary, write_audit_jsonl, write_equity_csv,
-    write_summary_html, write_summary_json, write_trades_csv, SummaryMeta,
-};
-use kairos_infrastructure::sentiment;
+use kairos_domain::services::engine::backtest::BacktestRunner;
 use kairos_domain::services::features;
-use kairos_domain::services::ohlcv::{data_quality_from_bars, resample_bars};
+use kairos_domain::services::market_data_source::VecBarSource;
+use kairos_domain::services::strategy::BuyAndHold;
+use kairos_domain::value_objects::equity_point::EquityPoint;
+use kairos_infrastructure::agents::AgentClient as InfraAgentClient;
+use kairos_infrastructure::artifacts::FilesystemArtifactWriter;
+use kairos_infrastructure::persistence::postgres_ohlcv::PostgresMarketDataRepository;
+use kairos_infrastructure::reporting::{
+    read_equity_csv, read_trades_csv, recompute_summary, write_audit_jsonl, write_summary_html,
+    write_summary_json, SummaryMeta,
+};
+use kairos_infrastructure::sentiment::FilesystemSentimentRepository;
 use std::env;
 use std::path::PathBuf;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 mod backtest;
 mod bench;
@@ -80,180 +79,123 @@ fn resolve_db_url(config: &Config) -> Result<String, String> {
 }
 
 fn run_validate(config_path: PathBuf, strict: bool, out: Option<PathBuf>) -> Result<(), String> {
-    let config = load_config(&config_path)?;
+    let (config, _config_toml) = load_config_with_source(&config_path)?;
     print_config_summary("validate", &config, None)?;
 
-    let expected_step = parse_duration_like(&config.run.timeframe)?;
-    let timeframe_label = normalize_timeframe_label(&config.run.timeframe)?;
-    let source_timeframe_label = normalize_timeframe_label(
-        config
-            .db
-            .source_timeframe
-            .as_deref()
-            .unwrap_or(&timeframe_label),
-    )?;
-    let source_step = parse_duration_like(&source_timeframe_label)?;
-    let exchange = config.db.exchange.to_lowercase();
-    let market = config.db.market.to_lowercase();
     let db_url = resolve_db_url(&config)?;
-    let (source_bars, source_report) = ohlcv::load_postgres(
-        &db_url,
-        &config.db.ohlcv_table,
-        &exchange,
-        &market,
-        &config.run.symbol,
-        &source_timeframe_label,
-        Some(source_step),
-    )?;
-    let source_rows = source_bars.len();
-    let (ohlcv_report, ohlcv_source_report, effective_rows, resampled) =
-        if source_timeframe_label != timeframe_label {
-            if source_step > expected_step {
-                return Err(format!(
-                "cannot resample OHLCV: source timeframe ({}) is larger than run timeframe ({})",
-                source_timeframe_label, timeframe_label
-            ));
-            }
-            let resampled_bars = resample_bars(&source_bars, expected_step)?;
-            let report = data_quality_from_bars(&resampled_bars, Some(expected_step));
-            (report, Some(source_report), resampled_bars.len(), true)
-        } else {
-            (source_report, None, source_rows, false)
-        };
+    let market_data = PostgresMarketDataRepository::new(db_url, config.db.ohlcv_table.to_string());
+    let sentiment_repo = FilesystemSentimentRepository;
 
-    if let Some(source) = &ohlcv_source_report {
-        println!(
-            "ohlcv source report (timeframe={}): duplicates={}, gaps={}, out_of_order={}, invalid_close={}",
-            source_timeframe_label, source.duplicates, source.gaps, source.out_of_order, source.invalid_close
-        );
-    }
-    println!(
-        "ohlcv report{}: duplicates={}, gaps={}, out_of_order={}, invalid_close={}",
-        if resampled { " (resampled)" } else { "" },
-        ohlcv_report.duplicates,
-        ohlcv_report.gaps,
-        ohlcv_report.out_of_order,
-        ohlcv_report.invalid_close
-    );
-
-    let (mut s_duplicates, mut s_out_of_order, mut s_missing, mut s_invalid, mut s_dropped) =
-        (0, 0, 0, 0, 0);
-    let mut sentiment_schema: Vec<String> = Vec::new();
-    if let Some(path) = &config.paths.sentiment_path {
-        let path_buf = PathBuf::from(path);
-        let ext = path_buf
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-        let missing_policy = resolve_sentiment_missing_policy(&config);
-        let (_, report) = if ext == "json" {
-            sentiment::load_json_with_policy(path_buf.as_path(), missing_policy)?
-        } else {
-            sentiment::load_csv_with_policy(path_buf.as_path(), missing_policy)?
-        };
-        println!(
-            "sentiment report: duplicates={}, out_of_order={}, missing_values={}, invalid_values={}, dropped_rows={}",
-            report.duplicates,
-            report.out_of_order,
-            report.missing_values,
-            report.invalid_values,
-            report.dropped_rows
-        );
-        s_duplicates = report.duplicates;
-        s_out_of_order = report.out_of_order;
-        s_missing = report.missing_values;
-        s_invalid = report.invalid_values;
-        s_dropped = report.dropped_rows;
-        sentiment_schema = report.schema;
-    }
-
-    let limits = config.data_quality.as_ref();
-    let max_gaps = limits.and_then(|l| l.max_gaps).unwrap_or(0);
-    let max_duplicates = limits.and_then(|l| l.max_duplicates).unwrap_or(0);
-    let max_out_of_order = limits.and_then(|l| l.max_out_of_order).unwrap_or(0);
-    let max_invalid_close = limits.and_then(|l| l.max_invalid_close).unwrap_or(0);
-    let max_sentiment_missing = limits.and_then(|l| l.max_sentiment_missing).unwrap_or(0);
-    let max_sentiment_invalid = limits.and_then(|l| l.max_sentiment_invalid).unwrap_or(0);
-    let max_sentiment_dropped = limits.and_then(|l| l.max_sentiment_dropped).unwrap_or(0);
-
-    if strict
-        && (ohlcv_report.gaps > max_gaps
-            || ohlcv_report.duplicates > max_duplicates
-            || ohlcv_report.out_of_order > max_out_of_order
-            || ohlcv_report.invalid_close > max_invalid_close
-            || s_duplicates > max_duplicates
-            || s_out_of_order > max_out_of_order
-            || s_missing > max_sentiment_missing
-            || s_invalid > max_sentiment_invalid
-            || s_dropped > max_sentiment_dropped)
-    {
-        return Err("strict validation failed: data quality limits exceeded".to_string());
-    }
+    let report =
+        kairos_application::validation::validate(&config, strict, &market_data, &sentiment_repo)?;
 
     if let Some(out_path) = out {
-        let report_json = serde_json::json!({
-            "ohlcv_resample": if resampled { serde_json::json!({
-                "from_timeframe": source_timeframe_label,
-                "to_timeframe": timeframe_label,
-                "source_step_seconds": source_step,
-                "target_step_seconds": expected_step,
-                "source_rows": source_rows,
-                "resampled_rows": effective_rows,
-            }) } else { serde_json::Value::Null },
-            "ohlcv_source": ohlcv_source_report.as_ref().map(|r| serde_json::json!({
-                "rows": source_rows,
-                "duplicates": r.duplicates,
-                "gaps": r.gaps,
-                "out_of_order": r.out_of_order,
-                "invalid_close": r.invalid_close,
-                "first_timestamp": r.first_timestamp,
-                "last_timestamp": r.last_timestamp,
-                "first_gap": r.first_gap,
-                "first_duplicate": r.first_duplicate,
-                "first_out_of_order": r.first_out_of_order,
-                "first_invalid_close": r.first_invalid_close,
-                "max_gap_seconds": r.max_gap_seconds,
-                "gap_count": r.gap_count,
-            })),
-            "ohlcv": {
-                "rows": effective_rows,
-                "duplicates": ohlcv_report.duplicates,
-                "gaps": ohlcv_report.gaps,
-                "out_of_order": ohlcv_report.out_of_order,
-                "invalid_close": ohlcv_report.invalid_close,
-                "first_timestamp": ohlcv_report.first_timestamp,
-                "last_timestamp": ohlcv_report.last_timestamp,
-                "first_gap": ohlcv_report.first_gap,
-                "first_duplicate": ohlcv_report.first_duplicate,
-                "first_out_of_order": ohlcv_report.first_out_of_order,
-                "first_invalid_close": ohlcv_report.first_invalid_close,
-                "max_gap_seconds": ohlcv_report.max_gap_seconds,
-                "gap_count": ohlcv_report.gap_count,
-            },
-            "sentiment": {
-                "duplicates": s_duplicates,
-                "out_of_order": s_out_of_order,
-                "missing_values": s_missing,
-                "invalid_values": s_invalid,
-                "dropped_rows": s_dropped,
-                "schema": sentiment_schema,
-            },
-            "limits": {
-                "max_gaps": max_gaps,
-                "max_duplicates": max_duplicates,
-                "max_out_of_order": max_out_of_order,
-                "max_invalid_close": max_invalid_close,
-                "max_sentiment_missing": max_sentiment_missing,
-                "max_sentiment_invalid": max_sentiment_invalid,
-                "max_sentiment_dropped": max_sentiment_dropped,
-            },
-            "strict": strict
-        });
-        std::fs::write(&out_path, report_json.to_string())
+        std::fs::write(&out_path, report.to_string())
             .map_err(|err| format!("failed to write report {}: {}", out_path.display(), err))?;
     }
 
+    Ok(())
+}
+
+fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
+    let (config, config_toml) = load_config_with_source(&config_path)?;
+    print_config_summary("backtest", &config, out.as_ref())?;
+
+    let overall_start = Instant::now();
+    let db_url = resolve_db_url(&config)?;
+    let market_data = PostgresMarketDataRepository::new(db_url, config.db.ohlcv_table.to_string());
+    let sentiment_repo = FilesystemSentimentRepository;
+    let artifacts = FilesystemArtifactWriter::new();
+
+    let remote_agent: Option<Box<dyn kairos_domain::repositories::agent::AgentClient>> =
+        match config.agent.mode {
+            AgentMode::Remote => {
+                let agent = InfraAgentClient::new(
+                    config.agent.url.clone(),
+                    config.agent.timeout_ms,
+                    config.agent.api_version.clone(),
+                    config.agent.feature_version.clone(),
+                    config.agent.retries,
+                    config.agent.fallback_action,
+                )
+                .map_err(|err| {
+                    format!(
+                        "failed to init remote agent client (url={}): {err}",
+                        config.agent.url
+                    )
+                })?;
+                Some(Box::new(agent))
+            }
+            _ => None,
+        };
+
+    let run_dir = kairos_application::backtesting::run_backtest(
+        &config,
+        &config_toml,
+        out,
+        &market_data,
+        &sentiment_repo,
+        &artifacts,
+        remote_agent,
+    )?;
+
+    println!("run output: {}", run_dir.display());
+    println!(
+        "{} cli: backtest total_ms={}",
+        engine_name(),
+        overall_start.elapsed().as_millis()
+    );
+    Ok(())
+}
+
+fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
+    let (config, config_toml) = load_config_with_source(&config_path)?;
+    print_config_summary("paper", &config, out.as_ref())?;
+
+    let overall_start = Instant::now();
+    let db_url = resolve_db_url(&config)?;
+    let market_data = PostgresMarketDataRepository::new(db_url, config.db.ohlcv_table.to_string());
+    let sentiment_repo = FilesystemSentimentRepository;
+    let artifacts = FilesystemArtifactWriter::new();
+
+    let remote_agent: Option<Box<dyn kairos_domain::repositories::agent::AgentClient>> =
+        match config.agent.mode {
+            AgentMode::Remote => {
+                let agent = InfraAgentClient::new(
+                    config.agent.url.clone(),
+                    config.agent.timeout_ms,
+                    config.agent.api_version.clone(),
+                    config.agent.feature_version.clone(),
+                    config.agent.retries,
+                    config.agent.fallback_action,
+                )
+                .map_err(|err| {
+                    format!(
+                        "failed to init remote agent client (url={}): {err}",
+                        config.agent.url
+                    )
+                })?;
+                Some(Box::new(agent))
+            }
+            _ => None,
+        };
+
+    let run_dir = kairos_application::paper_trading::run_paper(
+        &config,
+        &config_toml,
+        out,
+        &market_data,
+        &sentiment_repo,
+        &artifacts,
+        remote_agent,
+    )?;
+
+    println!("run output: {}", run_dir.display());
+    println!(
+        "{} cli: paper total_ms={}",
+        engine_name(),
+        overall_start.elapsed().as_millis()
+    );
     Ok(())
 }
 
@@ -353,10 +295,10 @@ fn run_report(input: PathBuf) -> Result<(), String> {
                     .unwrap_or(false);
                 (meta, Some(snapshot), report_html, run_id)
             }
-            Err(_) => (None, None, false, "report".to_string()),
+            Err(_) => (None, None, false, "unknown".to_string()),
         }
     } else {
-        (None, None, false, "report".to_string())
+        (None, None, false, "unknown".to_string())
     };
 
     write_summary_json(
@@ -374,7 +316,6 @@ fn run_report(input: PathBuf) -> Result<(), String> {
     }
 
     let end_ts = equity.last().map(|p| p.timestamp).unwrap_or(0);
-
     let mut events = Vec::with_capacity(trades.len() + 2);
     for trade in &trades {
         events.push(AuditEvent {
@@ -557,408 +498,6 @@ fn print_config_summary(
     Ok(())
 }
 
-fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
-    let config = load_config(&config_path)?;
-    print_config_summary("backtest", &config, out.as_ref())?;
-
-    let mut audit_extras: Vec<AuditEvent> = Vec::new();
-    let overall_start = Instant::now();
-
-    let expected_step = parse_duration_like(&config.run.timeframe)?;
-    let timeframe_label = normalize_timeframe_label(&config.run.timeframe)?;
-    let source_timeframe_label = normalize_timeframe_label(
-        config
-            .db
-            .source_timeframe
-            .as_deref()
-            .unwrap_or(&timeframe_label),
-    )?;
-    let source_step = parse_duration_like(&source_timeframe_label)?;
-    let exchange = config.db.exchange.to_lowercase();
-    let market = config.db.market.to_lowercase();
-    let db_url = resolve_db_url(&config)?;
-    let stage_start = Instant::now();
-    let (source_bars, source_report) = ohlcv::load_postgres(
-        &db_url,
-        &config.db.ohlcv_table,
-        &exchange,
-        &market,
-        &config.run.symbol,
-        &source_timeframe_label,
-        Some(source_step),
-    )?;
-    let (bars, data_report, resampled) = if source_timeframe_label != timeframe_label {
-        if source_step > expected_step {
-            return Err(format!(
-                "cannot resample OHLCV: source timeframe ({}) is larger than run timeframe ({})",
-                source_timeframe_label, timeframe_label
-            ));
-        }
-        let resample_start = Instant::now();
-        let resampled_bars = resample_bars(&source_bars, expected_step)?;
-        let report = data_quality_from_bars(&resampled_bars, Some(expected_step));
-        audit_extras.push(timing_event(
-            &config.run.run_id,
-            0,
-            "timing",
-            Some(&config.run.symbol),
-            "resample_ohlcv",
-            resample_start.elapsed().as_millis() as u64,
-            serde_json::json!({
-                "from_timeframe": source_timeframe_label,
-                "to_timeframe": timeframe_label,
-                "source_rows": source_bars.len(),
-                "resampled_rows": resampled_bars.len(),
-            }),
-        ));
-        (resampled_bars, report, true)
-    } else {
-        (source_bars, source_report, false)
-    };
-    audit_extras.push(timing_event(
-        &config.run.run_id,
-        0,
-        "timing",
-        Some(&config.run.symbol),
-        "load_ohlcv",
-        stage_start.elapsed().as_millis() as u64,
-        serde_json::json!({
-            "rows": bars.len(),
-            "duplicates": data_report.duplicates,
-            "gaps": data_report.gaps,
-            "out_of_order": data_report.out_of_order,
-            "invalid_close": data_report.invalid_close,
-            "resampled": resampled,
-        }),
-    ));
-
-    let sentiment_points = if let Some(path) = &config.paths.sentiment_path {
-        let stage_start = Instant::now();
-        let path_buf = PathBuf::from(path);
-        let ext = path_buf
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-        let missing_policy = resolve_sentiment_missing_policy(&config);
-        let (points, report) = if ext == "json" {
-            sentiment::load_json_with_policy(path_buf.as_path(), missing_policy)?
-        } else {
-            sentiment::load_csv_with_policy(path_buf.as_path(), missing_policy)?
-        };
-        if report.duplicates > 0
-            || report.out_of_order > 0
-            || report.missing_values > 0
-            || report.invalid_values > 0
-            || report.dropped_rows > 0
-        {
-            println!(
-                "sentiment report: duplicates={}, out_of_order={}, missing_values={}, invalid_values={}, dropped_rows={}",
-                report.duplicates,
-                report.out_of_order,
-                report.missing_values,
-                report.invalid_values,
-                report.dropped_rows
-            );
-        }
-        audit_extras.push(timing_event(
-            &config.run.run_id,
-            0,
-            "timing",
-            Some(&config.run.symbol),
-            "load_sentiment",
-            stage_start.elapsed().as_millis() as u64,
-            serde_json::json!({
-                "rows": points.len(),
-                "duplicates": report.duplicates,
-                "out_of_order": report.out_of_order,
-                "missing_values": report.missing_values,
-                "invalid_values": report.invalid_values,
-                "dropped_rows": report.dropped_rows,
-                "schema": report.schema,
-            }),
-        ));
-        Some(points)
-    } else {
-        None
-    };
-
-    if data_report.duplicates > 0
-        || data_report.gaps > 0
-        || data_report.out_of_order > 0
-        || data_report.invalid_close > 0
-    {
-        println!(
-            "ohlcv report: duplicates={}, gaps={}, out_of_order={}, invalid_close={}",
-            data_report.duplicates,
-            data_report.gaps,
-            data_report.out_of_order,
-            data_report.invalid_close
-        );
-    }
-
-    let sentiment_lag = parse_duration_like(&config.features.sentiment_lag)?;
-    let bar_timestamps: Vec<i64> = bars.iter().map(|bar| bar.timestamp).collect();
-    let stage_start = Instant::now();
-    let aligned_sentiment = sentiment_points
-        .as_ref()
-        .map(|points| sentiment::align_with_bars(&bar_timestamps, points, sentiment_lag))
-        .unwrap_or_else(|| vec![None; bars.len()]);
-    audit_extras.push(timing_event(
-        &config.run.run_id,
-        0,
-        "timing",
-        Some(&config.run.symbol),
-        "align_sentiment",
-        stage_start.elapsed().as_millis() as u64,
-        serde_json::json!({
-            "lag_seconds": sentiment_lag,
-        }),
-    ));
-
-    let feature_config = features::FeatureConfig {
-        return_mode: config.features.return_mode,
-        sma_windows: config
-            .features
-            .sma_windows
-            .iter()
-            .map(|w| *w as usize)
-            .collect(),
-        volatility_windows: config
-            .features
-            .volatility_windows
-            .as_ref()
-            .map(|windows| windows.iter().map(|w| *w as usize).collect())
-            .unwrap_or_default(),
-        rsi_enabled: config.features.rsi_enabled,
-    };
-    let builder = features::FeatureBuilder::new(feature_config);
-
-    let risk_limits = RiskLimits {
-        max_position_qty: config.risk.max_position_qty,
-        max_drawdown_pct: config.risk.max_drawdown_pct,
-        max_exposure_pct: config.risk.max_exposure_pct,
-    };
-
-    let size_mode = resolve_size_mode(&config);
-
-    let strategy = match config.agent.mode {
-        AgentMode::Remote => {
-            let fallback_action = config.agent.fallback_action;
-            let agent_url = config.agent.url.clone();
-            let agent = AgentClient::new(
-                agent_url.clone(),
-                config.agent.timeout_ms,
-                config.agent.api_version.clone(),
-                config.agent.feature_version.clone(),
-                config.agent.retries,
-                fallback_action,
-            )
-            .map_err(|err| {
-                format!(
-                    "failed to init remote agent client (url={}): {err}",
-                    agent_url
-                )
-            })?;
-            let agent: Box<dyn kairos_domain::repositories::agent::AgentClient> = Box::new(agent);
-            StrategyKind::Agent(AgentStrategy::new(
-                config.run.run_id.clone(),
-                config.run.symbol.clone(),
-                config.run.timeframe.clone(),
-                config.agent.api_version.clone(),
-                config.agent.feature_version.clone(),
-                agent_url,
-                fallback_action,
-                agent,
-                builder,
-                aligned_sentiment,
-            ))
-        }
-        AgentMode::Baseline => {
-            let baseline = config
-                .strategy
-                .as_ref()
-                .map(|strategy| strategy.baseline.as_str())
-                .unwrap_or("buy_and_hold");
-            match baseline {
-                "sma" => {
-                    let (short, long) = resolve_sma_windows(&config);
-                    StrategyKind::SimpleSma(SimpleSma::new(short, long))
-                }
-                _ => StrategyKind::BuyAndHold(BuyAndHold::new(1.0)),
-            }
-        }
-        AgentMode::Hold => StrategyKind::Hold(HoldStrategy),
-    };
-
-    let metrics_config = build_metrics_config(&config);
-    let execution = resolve_execution_config(&config)?;
-
-    let data = VecBarSource::new(bars);
-    let stage_start = Instant::now();
-    let mut runner = BacktestRunner::new_with_execution(
-        config.run.run_id.clone(),
-        strategy,
-        data,
-        risk_limits,
-        config.run.initial_capital,
-        metrics_config,
-        config.costs.fee_bps,
-        config.run.symbol.clone(),
-        size_mode,
-        execution,
-    );
-    let results = runner.run();
-    audit_extras.push(timing_event(
-        &config.run.run_id,
-        0,
-        "timing",
-        Some(&config.run.symbol),
-        "run_engine",
-        stage_start.elapsed().as_millis() as u64,
-        serde_json::json!({}),
-    ));
-
-    write_outputs(&config, out, results, &config_path, audit_extras)?;
-    println!(
-        "{} cli: backtest total_ms={}",
-        engine_name(),
-        overall_start.elapsed().as_millis()
-    );
-    Ok(())
-}
-
-fn write_outputs(
-    config: &Config,
-    out: Option<PathBuf>,
-    results: BacktestResults,
-    config_path: &PathBuf,
-    mut audit_extras: Vec<AuditEvent>,
-) -> Result<(), String> {
-    let base_dir = out.unwrap_or_else(|| PathBuf::from(&config.paths.out_dir));
-    let run_dir = base_dir.join(&config.run.run_id);
-    std::fs::create_dir_all(&run_dir)
-        .map_err(|err| format!("failed to create run dir {}: {}", run_dir.display(), err))?;
-
-    write_trades_csv(run_dir.join("trades.csv").as_path(), &results.trades)?;
-    write_equity_csv(run_dir.join("equity.csv").as_path(), &results.equity)?;
-    let meta = summary_meta_from_equity(config, &results.equity);
-    let execution = resolve_execution_config(config)?;
-    let config_snapshot = serde_json::json!({
-        "db": {
-            "exchange": config.db.exchange.clone(),
-            "market": config.db.market.clone(),
-            "ohlcv_table": config.db.ohlcv_table.clone(),
-        },
-        "costs": {
-            "fee_bps": config.costs.fee_bps,
-            "slippage_bps": config.costs.slippage_bps,
-        },
-        "execution": {
-            "model": match execution.model {
-                kairos_domain::services::engine::execution::ExecutionModel::Simple => "simple",
-                kairos_domain::services::engine::execution::ExecutionModel::Complete => "complete",
-            },
-            "latency_bars": execution.latency_bars,
-            "buy_kind": format!("{:?}", execution.buy_kind).to_lowercase(),
-            "sell_kind": format!("{:?}", execution.sell_kind).to_lowercase(),
-            "price_reference": match execution.price_reference {
-                kairos_domain::services::engine::execution::PriceReference::Close => "close",
-                kairos_domain::services::engine::execution::PriceReference::Open => "open",
-            },
-            "limit_offset_bps": execution.limit_offset_bps,
-            "stop_offset_bps": execution.stop_offset_bps,
-            "spread_bps": execution.spread_bps,
-            "max_fill_pct_of_volume": execution.max_fill_pct_of_volume,
-            "tif": format!("{:?}", execution.tif).to_lowercase(),
-            "expire_after_bars": execution.expire_after_bars,
-        },
-        "risk": {
-            "max_position_qty": config.risk.max_position_qty,
-            "max_drawdown_pct": config.risk.max_drawdown_pct,
-            "max_exposure_pct": config.risk.max_exposure_pct,
-        },
-        "orders": {
-            "size_mode": config.orders.as_ref().and_then(|o| o.size_mode.as_deref()).unwrap_or("qty"),
-        },
-        "features": {
-            "return_mode": config.features.return_mode.clone(),
-            "sma_windows": config.features.sma_windows.clone(),
-            "volatility_windows": config.features.volatility_windows.clone(),
-            "rsi_enabled": config.features.rsi_enabled,
-            "sentiment_lag": config.features.sentiment_lag.clone(),
-            "sentiment_missing": config.features.sentiment_missing.as_deref().unwrap_or("error"),
-        },
-        "agent": {
-            "mode": match config.agent.mode {
-                AgentMode::Remote => "remote",
-                AgentMode::Baseline => "baseline",
-                AgentMode::Hold => "hold",
-            },
-            "url": config.agent.url.clone(),
-            "timeout_ms": config.agent.timeout_ms,
-            "retries": config.agent.retries,
-            "fallback_action": config.agent.fallback_action.clone(),
-            "api_version": config.agent.api_version.clone(),
-            "feature_version": config.agent.feature_version.clone(),
-        },
-        "data_quality": config.data_quality.as_ref().map(|dq| serde_json::json!({
-            "max_gaps": dq.max_gaps,
-            "max_duplicates": dq.max_duplicates,
-            "max_out_of_order": dq.max_out_of_order,
-            "max_invalid_close": dq.max_invalid_close,
-            "max_sentiment_missing": dq.max_sentiment_missing,
-            "max_sentiment_invalid": dq.max_sentiment_invalid,
-            "max_sentiment_dropped": dq.max_sentiment_dropped,
-        })),
-    });
-    write_summary_json(
-        run_dir.join("summary.json").as_path(),
-        &results.summary,
-        meta.as_ref(),
-        Some(&config_snapshot),
-    )?;
-    let mut audit_events = results.audit_events;
-    audit_events.append(&mut audit_extras);
-    audit_events.sort_by(|a, b| {
-        a.timestamp
-            .cmp(&b.timestamp)
-            .then_with(|| a.stage.cmp(&b.stage))
-            .then_with(|| a.action.cmp(&b.action))
-    });
-    write_audit_jsonl(run_dir.join("logs.jsonl").as_path(), &audit_events)?;
-    if config
-        .report
-        .as_ref()
-        .and_then(|report| report.html)
-        .unwrap_or(false)
-    {
-        write_summary_html(
-            run_dir.join("summary.html").as_path(),
-            &results.summary,
-            meta.as_ref(),
-        )?;
-    }
-    std::fs::copy(config_path, run_dir.join("config_snapshot.toml")).map_err(|err| {
-        format!(
-            "failed to copy config to snapshot {}: {}",
-            run_dir.display(),
-            err
-        )
-    })?;
-
-    println!("run output: {}", run_dir.display());
-    Ok(())
-}
-
-fn parse_duration_like(value: &str) -> Result<i64, String> {
-    kairos_domain::value_objects::timeframe::parse_duration_like_seconds(value)
-}
-
-fn normalize_timeframe_label(value: &str) -> Result<String, String> {
-    kairos_domain::value_objects::timeframe::Timeframe::parse(value).map(|tf| tf.label)
-}
-
 fn summary_meta_from_equity(config: &Config, equity: &[EquityPoint]) -> Option<SummaryMeta> {
     let start = equity.first()?.timestamp;
     let end = equity.last()?.timestamp;
@@ -969,328 +508,6 @@ fn summary_meta_from_equity(config: &Config, equity: &[EquityPoint]) -> Option<S
         start,
         end,
     })
-}
-
-fn build_metrics_config(config: &Config) -> MetricsConfig {
-    let risk_free_rate = config
-        .metrics
-        .as_ref()
-        .and_then(|metrics| metrics.risk_free_rate)
-        .unwrap_or(0.0);
-    let annualization_factor = config
-        .metrics
-        .as_ref()
-        .and_then(|metrics| metrics.annualization_factor);
-    MetricsConfig {
-        risk_free_rate,
-        annualization_factor,
-    }
-}
-
-fn resolve_sma_windows(config: &Config) -> (usize, usize) {
-    if let Some(strategy) = &config.strategy {
-        if let (Some(short), Some(long)) = (strategy.sma_short, strategy.sma_long) {
-            return (short as usize, long as usize);
-        }
-    }
-    if config.features.sma_windows.len() >= 2 {
-        return (
-            config.features.sma_windows[0] as usize,
-            config.features.sma_windows[1] as usize,
-        );
-    }
-    (10, 50)
-}
-
-fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
-    let config = load_config(&config_path)?;
-    print_config_summary("paper", &config, out.as_ref())?;
-
-    let mut audit_extras: Vec<AuditEvent> = Vec::new();
-    let overall_start = Instant::now();
-
-    let expected_step = parse_duration_like(&config.run.timeframe)?;
-    let timeframe_label = normalize_timeframe_label(&config.run.timeframe)?;
-    let source_timeframe_label = normalize_timeframe_label(
-        config
-            .db
-            .source_timeframe
-            .as_deref()
-            .unwrap_or(&timeframe_label),
-    )?;
-    let source_step = parse_duration_like(&source_timeframe_label)?;
-    let exchange = config.db.exchange.to_lowercase();
-    let market = config.db.market.to_lowercase();
-    let db_url = resolve_db_url(&config)?;
-    let stage_start = Instant::now();
-    let (source_bars, source_report) = ohlcv::load_postgres(
-        &db_url,
-        &config.db.ohlcv_table,
-        &exchange,
-        &market,
-        &config.run.symbol,
-        &source_timeframe_label,
-        Some(source_step),
-    )?;
-    let (bars, data_report, resampled) = if source_timeframe_label != timeframe_label {
-        if source_step > expected_step {
-            return Err(format!(
-                "cannot resample OHLCV: source timeframe ({}) is larger than run timeframe ({})",
-                source_timeframe_label, timeframe_label
-            ));
-        }
-        let resample_start = Instant::now();
-        let resampled_bars = resample_bars(&source_bars, expected_step)?;
-        let report = data_quality_from_bars(&resampled_bars, Some(expected_step));
-        audit_extras.push(timing_event(
-            &config.run.run_id,
-            0,
-            "timing",
-            Some(&config.run.symbol),
-            "resample_ohlcv",
-            resample_start.elapsed().as_millis() as u64,
-            serde_json::json!({
-                "from_timeframe": source_timeframe_label,
-                "to_timeframe": timeframe_label,
-                "source_rows": source_bars.len(),
-                "resampled_rows": resampled_bars.len(),
-            }),
-        ));
-        (resampled_bars, report, true)
-    } else {
-        (source_bars, source_report, false)
-    };
-    audit_extras.push(timing_event(
-        &config.run.run_id,
-        0,
-        "timing",
-        Some(&config.run.symbol),
-        "load_ohlcv",
-        stage_start.elapsed().as_millis() as u64,
-        serde_json::json!({
-            "rows": bars.len(),
-            "duplicates": data_report.duplicates,
-            "gaps": data_report.gaps,
-            "out_of_order": data_report.out_of_order,
-            "invalid_close": data_report.invalid_close,
-            "resampled": resampled,
-        }),
-    ));
-
-    if data_report.duplicates > 0
-        || data_report.gaps > 0
-        || data_report.out_of_order > 0
-        || data_report.invalid_close > 0
-    {
-        println!(
-            "ohlcv report: duplicates={}, gaps={}, out_of_order={}, invalid_close={}",
-            data_report.duplicates,
-            data_report.gaps,
-            data_report.out_of_order,
-            data_report.invalid_close
-        );
-    }
-
-    let sentiment_points = if let Some(path) = &config.paths.sentiment_path {
-        let stage_start = Instant::now();
-        let path_buf = PathBuf::from(path);
-        let ext = path_buf
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-        let missing_policy = resolve_sentiment_missing_policy(&config);
-        let (points, report) = if ext == "json" {
-            sentiment::load_json_with_policy(path_buf.as_path(), missing_policy)?
-        } else {
-            sentiment::load_csv_with_policy(path_buf.as_path(), missing_policy)?
-        };
-        if report.duplicates > 0
-            || report.out_of_order > 0
-            || report.missing_values > 0
-            || report.invalid_values > 0
-            || report.dropped_rows > 0
-        {
-            println!(
-                "sentiment report: duplicates={}, out_of_order={}, missing_values={}, invalid_values={}, dropped_rows={}",
-                report.duplicates,
-                report.out_of_order,
-                report.missing_values,
-                report.invalid_values,
-                report.dropped_rows
-            );
-        }
-        audit_extras.push(timing_event(
-            &config.run.run_id,
-            0,
-            "timing",
-            Some(&config.run.symbol),
-            "load_sentiment",
-            stage_start.elapsed().as_millis() as u64,
-            serde_json::json!({
-                "rows": points.len(),
-                "duplicates": report.duplicates,
-                "out_of_order": report.out_of_order,
-                "missing_values": report.missing_values,
-                "invalid_values": report.invalid_values,
-                "dropped_rows": report.dropped_rows,
-                "schema": report.schema,
-            }),
-        ));
-        Some(points)
-    } else {
-        None
-    };
-
-    let sentiment_lag = parse_duration_like(&config.features.sentiment_lag)?;
-    let bar_timestamps: Vec<i64> = bars.iter().map(|bar| bar.timestamp).collect();
-    let stage_start = Instant::now();
-    let aligned_sentiment = sentiment_points
-        .as_ref()
-        .map(|points| sentiment::align_with_bars(&bar_timestamps, points, sentiment_lag))
-        .unwrap_or_else(|| vec![None; bars.len()]);
-    audit_extras.push(timing_event(
-        &config.run.run_id,
-        0,
-        "timing",
-        Some(&config.run.symbol),
-        "align_sentiment",
-        stage_start.elapsed().as_millis() as u64,
-        serde_json::json!({
-            "lag_seconds": sentiment_lag,
-        }),
-    ));
-
-    let feature_config = features::FeatureConfig {
-        return_mode: config.features.return_mode,
-        sma_windows: config
-            .features
-            .sma_windows
-            .iter()
-            .map(|w| *w as usize)
-            .collect(),
-        volatility_windows: config
-            .features
-            .volatility_windows
-            .as_ref()
-            .map(|windows| windows.iter().map(|w| *w as usize).collect())
-            .unwrap_or_default(),
-        rsi_enabled: config.features.rsi_enabled,
-    };
-    let builder = features::FeatureBuilder::new(feature_config);
-
-    let strategy = match config.agent.mode {
-        AgentMode::Remote => {
-            let fallback_action = config.agent.fallback_action;
-            let agent_url = config.agent.url.clone();
-            let agent = AgentClient::new(
-                agent_url.clone(),
-                config.agent.timeout_ms,
-                config.agent.api_version.clone(),
-                config.agent.feature_version.clone(),
-                config.agent.retries,
-                fallback_action,
-            )
-            .map_err(|err| {
-                format!(
-                    "failed to init remote agent client (url={}): {err}",
-                    agent_url
-                )
-            })?;
-            let agent: Box<dyn kairos_domain::repositories::agent::AgentClient> = Box::new(agent);
-            StrategyKind::Agent(AgentStrategy::new(
-                config.run.run_id.clone(),
-                config.run.symbol.clone(),
-                config.run.timeframe.clone(),
-                config.agent.api_version.clone(),
-                config.agent.feature_version.clone(),
-                agent_url,
-                fallback_action,
-                agent,
-                builder,
-                aligned_sentiment,
-            ))
-        }
-        AgentMode::Baseline => {
-            let baseline = config
-                .strategy
-                .as_ref()
-                .map(|strategy| strategy.baseline.as_str())
-                .unwrap_or("buy_and_hold");
-            match baseline {
-                "sma" => {
-                    let (short, long) = resolve_sma_windows(&config);
-                    StrategyKind::SimpleSma(SimpleSma::new(short, long))
-                }
-                _ => StrategyKind::BuyAndHold(BuyAndHold::new(1.0)),
-            }
-        }
-        AgentMode::Hold => StrategyKind::Hold(HoldStrategy),
-    };
-
-    let metrics_config = build_metrics_config(&config);
-    let execution = resolve_execution_config(&config)?;
-
-    let risk_limits = RiskLimits {
-        max_position_qty: config.risk.max_position_qty,
-        max_drawdown_pct: config.risk.max_drawdown_pct,
-        max_exposure_pct: config.risk.max_exposure_pct,
-    };
-
-    let size_mode = resolve_size_mode(&config);
-
-    let timeframe_seconds = parse_duration_like(&config.run.timeframe)?;
-    let replay_scale = config
-        .paper
-        .as_ref()
-        .and_then(|paper| paper.replay_scale)
-        .unwrap_or(60);
-    let data = RealtimeBarSource::new(bars, timeframe_seconds, replay_scale);
-    let stage_start = Instant::now();
-    let mut runner = BacktestRunner::new_with_execution(
-        config.run.run_id.clone(),
-        strategy,
-        data,
-        risk_limits,
-        config.run.initial_capital,
-        metrics_config,
-        config.costs.fee_bps,
-        config.run.symbol.clone(),
-        size_mode,
-        execution,
-    );
-    let results = runner.run();
-    audit_extras.push(timing_event(
-        &config.run.run_id,
-        0,
-        "timing",
-        Some(&config.run.symbol),
-        "run_engine",
-        stage_start.elapsed().as_millis() as u64,
-        serde_json::json!({}),
-    ));
-    write_outputs(&config, out, results, &config_path, audit_extras)?;
-    println!(
-        "{} cli: paper total_ms={}",
-        engine_name(),
-        overall_start.elapsed().as_millis()
-    );
-    Ok(())
-}
-
-fn resolve_size_mode(config: &Config) -> kairos_domain::services::engine::backtest::OrderSizeMode {
-    match config
-        .orders
-        .as_ref()
-        .and_then(|orders| orders.size_mode.as_deref())
-        .map(|s| s.trim().to_lowercase())
-        .as_deref()
-    {
-        Some("pct_equity") | Some("equity_pct") | Some("pct") => {
-            kairos_domain::services::engine::backtest::OrderSizeMode::PctEquity
-        }
-        _ => kairos_domain::services::engine::backtest::OrderSizeMode::Quantity,
-    }
 }
 
 fn resolve_execution_config(
@@ -1356,149 +573,40 @@ fn resolve_execution_config(
         };
     }
 
-    if let Some(limit_offset_bps) = exec.limit_offset_bps {
-        if !limit_offset_bps.is_finite() || limit_offset_bps < 0.0 {
-            return Err("execution.limit_offset_bps must be finite and >= 0".to_string());
-        }
-        cfg.limit_offset_bps = limit_offset_bps;
+    if let Some(value) = exec.limit_offset_bps {
+        cfg.limit_offset_bps = value;
     }
 
-    if let Some(stop_offset_bps) = exec.stop_offset_bps {
-        if !stop_offset_bps.is_finite() || stop_offset_bps < 0.0 {
-            return Err("execution.stop_offset_bps must be finite and >= 0".to_string());
-        }
-        cfg.stop_offset_bps = stop_offset_bps;
+    if let Some(value) = exec.stop_offset_bps {
+        cfg.stop_offset_bps = value;
     }
 
-    if let Some(spread_bps) = exec.spread_bps {
-        if !spread_bps.is_finite() || spread_bps < 0.0 {
-            return Err("execution.spread_bps must be finite and >= 0".to_string());
-        }
-        cfg.spread_bps = spread_bps;
+    if let Some(value) = exec.spread_bps {
+        cfg.spread_bps = value;
     }
 
-    if let Some(max_fill) = exec.max_fill_pct_of_volume {
-        if !(max_fill.is_finite() && 0.0 < max_fill && max_fill <= 1.0) {
-            return Err("execution.max_fill_pct_of_volume must be in (0, 1]".to_string());
-        }
-        cfg.max_fill_pct_of_volume = max_fill;
+    if let Some(value) = exec.max_fill_pct_of_volume {
+        cfg.max_fill_pct_of_volume = value;
     }
 
     if let Some(value) = exec.tif.as_deref() {
         cfg.tif = match value.trim().to_lowercase().as_str() {
-            "gtc" => core_exec::TimeInForce::Gtc,
             "ioc" => core_exec::TimeInForce::Ioc,
-            "fok" => core_exec::TimeInForce::Fok,
-            _ => return Err("execution.tif must be: gtc | ioc | fok".to_string()),
+            "gtc" => core_exec::TimeInForce::Gtc,
+            _ => return Err("execution.tif must be: ioc | gtc".to_string()),
         };
     }
 
-    if let Some(expire_after_bars) = exec.expire_after_bars {
-        cfg.expire_after_bars = Some(expire_after_bars.max(1));
+    if let Some(value) = exec.expire_after_bars {
+        cfg.expire_after_bars = Some(value.max(1));
     }
 
-    cfg.slippage_bps = slippage_bps;
     Ok(cfg)
-}
-
-fn resolve_sentiment_missing_policy(
-    config: &Config,
-) -> kairos_domain::services::sentiment::MissingValuePolicy {
-    match config
-        .features
-        .sentiment_missing
-        .as_deref()
-        .unwrap_or("error")
-        .trim()
-        .to_lowercase()
-        .as_str()
-    {
-        "zero" | "zero_fill" => kairos_domain::services::sentiment::MissingValuePolicy::ZeroFill,
-        "ffill" | "forward_fill" => {
-            kairos_domain::services::sentiment::MissingValuePolicy::ForwardFill
-        }
-        "drop" | "drop_row" => kairos_domain::services::sentiment::MissingValuePolicy::DropRow,
-        _ => kairos_domain::services::sentiment::MissingValuePolicy::Error,
-    }
-}
-
-fn timing_event(
-    run_id: &str,
-    timestamp: i64,
-    stage: &str,
-    symbol: Option<&str>,
-    action: &str,
-    duration_ms: u64,
-    details: serde_json::Value,
-) -> AuditEvent {
-    AuditEvent {
-        run_id: run_id.to_string(),
-        timestamp,
-        stage: stage.to_string(),
-        symbol: symbol.map(|s| s.to_string()),
-        action: action.to_string(),
-        error: None,
-        details: serde_json::json!({
-            "duration_ms": duration_ms,
-            "details": details,
-        }),
-    }
-}
-
-struct RealtimeBarSource {
-    bars: Vec<kairos_domain::value_objects::bar::Bar>,
-    index: usize,
-    sleep_seconds: i64,
-    last_tick: Option<Instant>,
-}
-
-impl RealtimeBarSource {
-    fn new(
-        bars: Vec<kairos_domain::value_objects::bar::Bar>,
-        sleep_seconds: i64,
-        replay_scale: u64,
-    ) -> Self {
-        let scaled = if replay_scale == 0 {
-            0
-        } else {
-            sleep_seconds / replay_scale as i64
-        };
-        Self {
-            bars,
-            index: 0,
-            sleep_seconds: scaled.max(0),
-            last_tick: None,
-        }
-    }
-}
-
-impl MarketDataSource for RealtimeBarSource {
-    fn next_bar(&mut self) -> Option<kairos_domain::value_objects::bar::Bar> {
-        if self.index >= self.bars.len() {
-            return None;
-        }
-        if self.sleep_seconds > 0 {
-            let now = Instant::now();
-            if let Some(last) = self.last_tick {
-                let elapsed = now.saturating_duration_since(last);
-                let target = Duration::from_secs(self.sleep_seconds as u64);
-                if elapsed < target {
-                    thread::sleep(target - elapsed);
-                }
-            } else {
-                thread::sleep(Duration::from_secs(self.sleep_seconds as u64));
-            }
-            self.last_tick = Some(Instant::now());
-        }
-        let bar = self.bars[self.index].clone();
-        self.index += 1;
-        Some(bar)
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_timeframe_label, parse_duration_like, run_backtest, run_validate};
+    use super::{run_backtest, run_validate};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1569,17 +677,19 @@ feature_version = \"v1\"\n",
 
     #[test]
     fn parse_duration_like_handles_units() {
-        assert_eq!(parse_duration_like("5s").unwrap(), 5);
-        assert_eq!(parse_duration_like("2m").unwrap(), 120);
-        assert_eq!(parse_duration_like("1h").unwrap(), 3600);
-        assert_eq!(parse_duration_like("1min").unwrap(), 60);
+        let parse = kairos_domain::value_objects::timeframe::parse_duration_like_seconds;
+        assert_eq!(parse("5s").unwrap(), 5);
+        assert_eq!(parse("2m").unwrap(), 120);
+        assert_eq!(parse("1h").unwrap(), 3600);
+        assert_eq!(parse("1min").unwrap(), 60);
     }
 
     #[test]
     fn normalize_timeframe_label_handles_aliases() {
-        assert_eq!(normalize_timeframe_label("1m").unwrap(), "1min");
-        assert_eq!(normalize_timeframe_label("1hour").unwrap(), "1hour");
-        assert_eq!(normalize_timeframe_label("1d").unwrap(), "1day");
+        let parse = kairos_domain::value_objects::timeframe::Timeframe::parse;
+        assert_eq!(parse("1m").unwrap().label, "1min");
+        assert_eq!(parse("1hour").unwrap().label, "1hour");
+        assert_eq!(parse("1d").unwrap().label, "1day");
     }
 
     #[test]

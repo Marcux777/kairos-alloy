@@ -1,5 +1,5 @@
-use crate::value_objects::bar::Bar;
 use crate::services::ohlcv::DataQualityReport;
+use crate::value_objects::bar::Bar;
 
 #[derive(Debug, Clone)]
 pub struct OhlcvQuery {

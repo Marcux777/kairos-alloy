@@ -18,11 +18,11 @@
 //! - No complex order types (OCO, iceberg, post-only, reduce-only, etc.).
 //! - Price references are bar-based (e.g., next bar open / within-bar touch), not tick-accurate.
 use super::execution::{ExecutionConfig, ExecutionModel, OrderKind, PriceReference, TimeInForce};
-use crate::services::market_data_source::MarketDataSource;
 use crate::entities::metrics::{MetricsConfig, MetricsState, MetricsSummary};
 use crate::entities::portfolio::Portfolio;
-use crate::services::audit::AuditEvent;
 use crate::entities::risk::RiskLimits;
+use crate::services::audit::AuditEvent;
+use crate::services::market_data_source::MarketDataSource;
 use crate::services::strategy::Strategy;
 use crate::value_objects::action::Action;
 use crate::value_objects::action_type::ActionType;
@@ -539,11 +539,7 @@ where
         self.open_orders = next_queue;
     }
 
-    fn raw_fill_price(
-        &self,
-        bar: &Bar,
-        order: &SimOrder,
-    ) -> Option<(f64, &'static str)> {
+    fn raw_fill_price(&self, bar: &Bar, order: &SimOrder) -> Option<(f64, &'static str)> {
         match order.kind {
             OrderKind::Market => Some((bar.open, "open")),
             OrderKind::Limit => match order.side {
@@ -1095,15 +1091,15 @@ fn order_reject_event(
 
 #[cfg(test)]
 mod tests {
-    use super::BacktestRunner;
-    use super::OrderSizeMode;
     use super::super::execution::{
         ExecutionConfig, ExecutionModel, OrderKind, PriceReference, TimeInForce,
     };
-    use crate::entities::portfolio::Portfolio;
-    use crate::services::market_data_source::MarketDataSource;
+    use super::BacktestRunner;
+    use super::OrderSizeMode;
     use crate::entities::metrics::MetricsConfig;
+    use crate::entities::portfolio::Portfolio;
     use crate::entities::risk::RiskLimits;
+    use crate::services::market_data_source::MarketDataSource;
     use crate::services::strategy::Strategy;
     use crate::value_objects::action::Action;
     use crate::value_objects::action_type::ActionType;

@@ -11,11 +11,16 @@ pub struct PostgresMarketDataRepository {
 
 impl PostgresMarketDataRepository {
     pub fn new(db_url: String, ohlcv_table: String) -> Self {
-        Self { db_url, ohlcv_table }
+        Self {
+            db_url,
+            ohlcv_table,
+        }
     }
 }
 
-impl kairos_domain::repositories::market_data::MarketDataRepository for PostgresMarketDataRepository {
+impl kairos_domain::repositories::market_data::MarketDataRepository
+    for PostgresMarketDataRepository
+{
     fn load_ohlcv(
         &self,
         query: &kairos_domain::repositories::market_data::OhlcvQuery,

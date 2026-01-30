@@ -12,4 +12,3 @@ pub struct Trade {
     pub strategy_id: String,
     pub reason: String,
 }
-

@@ -8,4 +8,3 @@ pub struct Order {
     pub limit_price: Option<f64>,
     pub timestamp: i64,
 }
-

@@ -7,4 +7,3 @@ pub struct Fill {
     pub slippage: f64,
     pub timestamp: i64,
 }
-

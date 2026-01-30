@@ -7,4 +7,3 @@ pub struct EquityPoint {
     pub unrealized_pnl: f64,
     pub realized_pnl: f64,
 }
-

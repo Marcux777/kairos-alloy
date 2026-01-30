@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod artifacts;
 pub mod market_data;
 pub mod persistence;
 pub mod reporting;

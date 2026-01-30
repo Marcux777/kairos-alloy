@@ -7,4 +7,3 @@ pub enum ActionType {
     Sell,
     Hold,
 }
-

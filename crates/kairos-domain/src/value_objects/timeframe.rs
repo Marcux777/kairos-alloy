@@ -93,4 +93,3 @@ pub fn parse_duration_like_seconds(value: &str) -> Result<i64, String> {
         .map_err(|_| format!("invalid duration: {value}"))?;
     Ok(number * multiplier)
 }
-

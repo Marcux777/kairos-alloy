@@ -18,7 +18,7 @@ Historically, the MVP used a single “core” crate that mixed:
 - domain logic (engine/portfolio/risk/metrics/strategy/types)
 - IO concerns (Postgres OHLCV loader, filesystem sentiment loader, HTTP agent client)
 
-**Status:** the workspace has since been split into `kairos-domain`, `kairos-infrastructure`, and `kairos-application`, and the old `kairos-core` crate has been removed. The remaining work is to move CLI orchestration into the application layer.
+**Status:** the workspace has since been split into `kairos-domain`, `kairos-infrastructure`, and `kairos-application`, and the old `kairos-core` crate has been removed. The CLI now acts as a thin composition root and delegates orchestration to `kairos-application` for backtest/paper/validate.
 
 ## Target workspace layout
 
@@ -113,12 +113,14 @@ pub trait SentimentRepository {
 }
 ```
 
+Sentiment alignment (timestamp join + lag) is pure logic and lives in `kairos-domain/src/services/sentiment.rs` as `align_with_bars(...)` (the infrastructure module delegates to it).
+
 ### Agent inference
 `repositories/agent.rs`
 ```rust
 pub trait AgentClient {
   fn act(&self, request: &ActionRequest) -> Result<ActionResponse, DomainError>;
-  fn act_batch(&self, requests: &[ActionRequest]) -> Result<Vec<ActionResponse>, DomainError>;
+  fn act_batch(&self, request: &ActionBatchRequest) -> Result<ActionBatchResponse, DomainError>;
 }
 ```
 
@@ -126,10 +128,13 @@ pub trait AgentClient {
 `artifacts.rs`
 ```rust
 pub trait ArtifactWriter {
+  fn ensure_dir(&self, path: &std::path::Path) -> Result<(), DomainError>;
   fn write_trades_csv(&self, path: &std::path::Path, trades: &[Trade]) -> Result<(), DomainError>;
   fn write_equity_csv(&self, path: &std::path::Path, points: &[EquityPoint]) -> Result<(), DomainError>;
-  fn write_summary_json(&self, path: &std::path::Path, summary: &Summary) -> Result<(), DomainError>;
-  fn write_logs_jsonl(&self, path: &std::path::Path, events: &[DomainEvent]) -> Result<(), DomainError>;
+  fn write_summary_json(&self, path: &std::path::Path, summary: &Summary, meta: Option<&serde_json::Value>, config_snapshot: Option<&serde_json::Value>) -> Result<(), DomainError>;
+  fn write_summary_html(&self, path: &std::path::Path, summary: &Summary, meta: Option<&serde_json::Value>) -> Result<(), DomainError>;
+  fn write_audit_jsonl(&self, path: &std::path::Path, events: &[AuditEvent]) -> Result<(), DomainError>;
+  fn write_config_snapshot_toml(&self, path: &std::path::Path, contents: &str) -> Result<(), DomainError>;
 }
 ```
 
@@ -144,7 +149,7 @@ pub trait Clock {
 
 ## Application layer (use cases)
 
-All use cases live in `kairos-application/src/use_cases/`.
+Use cases live in `kairos-application/src/backtesting/`, `kairos-application/src/paper_trading/`, and `kairos-application/src/validation/`.
 
 ### Use cases
 - `RunBacktest`
@@ -206,6 +211,8 @@ Acceptance criteria:
 
 Acceptance criteria:
 - CLI behavior unchanged (golden files / integration tests remain green).
+
+**Status:** completed for backtest/paper/validate; reporting regeneration (`kairos-alloy report`) can be migrated next.
 
 ### Phase 3 — Domain aggregate + domain events
 1. Introduce `TradingAccount` aggregate, replace direct portfolio/risk mutations with aggregate methods.

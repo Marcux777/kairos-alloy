@@ -4,7 +4,7 @@
 Kairos Alloy is a Rust-first system organized as a workspace with five crates:
 
 - `kairos-domain`: domain types + pure engine logic (no IO)
-- `kairos-application`: use cases / orchestration (WIP)
+- `kairos-application`: use cases / orchestration (backtest/paper/validate)
 - `kairos-infrastructure`: adapters (Postgres, filesystem, HTTP)
 - `kairos-cli`: command-line interface
 - `kairos-ingest`: data ingestion (KuCoin OHLCV → PostgreSQL) + DB migrations
@@ -15,7 +15,7 @@ Kairos Alloy is a Rust-first system organized as a workspace with five crates:
 The workspace is already structured as **Ports & Adapters**:
 - domain logic and the backtest engine live in `kairos-domain`
 - IO adapters live in `kairos-infrastructure`
-- `kairos-cli` orchestrates workflows (until the application layer is fully implemented)
+- `kairos-cli` is a thin composition root that instantiates adapters and calls `kairos-application`
 
 ### Target (recommended): Hexagonal (Ports & Adapters) + DDD-inspired layers
 We will keep evolving the workspace toward a stricter **Ports & Adapters** structure:
@@ -43,7 +43,7 @@ Entry point for users to run backtests and manage configs.
 
 Modules:
 - `commands`: CLI subcommands and routing
-- `config`: config loading and validation
+- `config`: re-exported config types/loader from `kairos-application`
 - `output`: summaries and report formatting
 
 ### kairos-ingest
@@ -52,7 +52,10 @@ Ingests OHLCV from KuCoin and persists it in PostgreSQL.
 It also applies SQL migrations from `migrations/`.
 
 ### kairos-application
-Use cases (WIP): intended home for orchestration like `RunBacktest`, `RunPaper`, `ValidateData`, `GenerateReport`.
+Use cases / orchestration:
+- `backtesting`: backtest run orchestration + artifact writing
+- `paper_trading`: replay/paper orchestration + artifact writing
+- `validation`: data quality validation report
 
 ### kairos-infrastructure
 Concrete adapters for Postgres, filesystem, HTTP agents, and artifact/report writing.

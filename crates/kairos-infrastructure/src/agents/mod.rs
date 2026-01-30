@@ -139,7 +139,8 @@ impl AgentClient {
                 attempts,
                 duration_ms: start.elapsed().as_millis() as u64,
                 status: last_status,
-                error: last_error.or_else(|| Some("agent request failed after retries".to_string())),
+                error: last_error
+                    .or_else(|| Some("agent request failed after retries".to_string())),
             },
             response: None,
         }
@@ -243,7 +244,8 @@ impl AgentClient {
                 attempts,
                 duration_ms: start.elapsed().as_millis() as u64,
                 status: last_status,
-                error: last_error.or_else(|| Some("agent request failed after retries".to_string())),
+                error: last_error
+                    .or_else(|| Some("agent request failed after retries".to_string())),
             },
             responses: None,
         }

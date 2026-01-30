@@ -6,4 +6,3 @@ pub enum Side {
     Buy,
     Sell,
 }
-

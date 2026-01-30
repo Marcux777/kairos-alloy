@@ -8,4 +8,3 @@ pub struct Bar {
     pub close: f64,
     pub volume: f64,
 }
-

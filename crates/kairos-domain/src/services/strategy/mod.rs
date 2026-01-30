@@ -168,7 +168,12 @@ impl AgentStrategy {
         }
     }
 
-    fn build_request(&self, bar: &Bar, observation: &Observation, portfolio: &Portfolio) -> ActionRequest {
+    fn build_request(
+        &self,
+        bar: &Bar,
+        observation: &Observation,
+        portfolio: &Portfolio,
+    ) -> ActionRequest {
         let dt: DateTime<Utc> = match Utc.timestamp_opt(bar.timestamp, 0) {
             chrono::LocalResult::Single(dt) => dt,
             _ => {
@@ -329,4 +334,3 @@ impl Strategy for StrategyKind {
         }
     }
 }
-

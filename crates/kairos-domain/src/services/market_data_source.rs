@@ -25,4 +25,3 @@ impl MarketDataSource for VecBarSource {
         Some(bar)
     }
 }
-

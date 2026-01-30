@@ -25,3 +25,26 @@ pub struct SentimentReport {
     pub first_out_of_order: Option<i64>,
     pub schema: Vec<String>,
 }
+
+pub fn align_with_bars(
+    bar_timestamps: &[i64],
+    sentiment: &[SentimentPoint],
+    sentiment_lag_seconds: i64,
+) -> Vec<Option<SentimentPoint>> {
+    use std::collections::BTreeMap;
+
+    let mut map: BTreeMap<i64, SentimentPoint> = BTreeMap::new();
+    for point in sentiment {
+        map.insert(point.timestamp, point.clone());
+    }
+
+    bar_timestamps
+        .iter()
+        .map(|ts| {
+            let cutoff = ts.saturating_sub(sentiment_lag_seconds);
+            map.range(..=cutoff)
+                .next_back()
+                .map(|(_, point)| point.clone())
+        })
+        .collect()
+}

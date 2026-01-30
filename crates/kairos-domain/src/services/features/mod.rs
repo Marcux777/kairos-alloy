@@ -170,4 +170,3 @@ mod tests {
         assert!(obs.values[1] >= 0.0);
     }
 }
-

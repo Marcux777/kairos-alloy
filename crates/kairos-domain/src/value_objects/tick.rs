@@ -5,4 +5,3 @@ pub struct Tick {
     pub price: f64,
     pub size: f64,
 }
-

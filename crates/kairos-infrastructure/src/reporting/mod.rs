@@ -419,4 +419,3 @@ mod tests {
         assert_eq!(parsed[0].timestamp, trades[0].timestamp);
     }
 }
-

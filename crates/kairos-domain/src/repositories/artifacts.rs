@@ -5,6 +5,7 @@ use crate::value_objects::trade::Trade;
 use std::path::Path;
 
 pub trait ArtifactWriter {
+    fn ensure_dir(&self, path: &Path) -> Result<(), String>;
     fn write_trades_csv(&self, path: &Path, trades: &[Trade]) -> Result<(), String>;
     fn write_equity_csv(&self, path: &Path, points: &[EquityPoint]) -> Result<(), String>;
     fn write_summary_json(
@@ -14,6 +15,12 @@ pub trait ArtifactWriter {
         meta: Option<&serde_json::Value>,
         config_snapshot: Option<&serde_json::Value>,
     ) -> Result<(), String>;
+    fn write_summary_html(
+        &self,
+        path: &Path,
+        summary: &MetricsSummary,
+        meta: Option<&serde_json::Value>,
+    ) -> Result<(), String>;
     fn write_audit_jsonl(&self, path: &Path, events: &[AuditEvent]) -> Result<(), String>;
+    fn write_config_snapshot_toml(&self, path: &Path, contents: &str) -> Result<(), String>;
 }
-

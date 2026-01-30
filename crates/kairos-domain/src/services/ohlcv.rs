@@ -16,7 +16,10 @@ pub struct DataQualityReport {
     pub gap_count: usize,
 }
 
-pub fn data_quality_from_bars(bars: &[Bar], expected_step_seconds: Option<i64>) -> DataQualityReport {
+pub fn data_quality_from_bars(
+    bars: &[Bar],
+    expected_step_seconds: Option<i64>,
+) -> DataQualityReport {
     let mut report = DataQualityReport::default();
     if bars.is_empty() {
         return report;
@@ -126,4 +129,3 @@ pub fn resample_bars(bars: &[Bar], target_step_seconds: i64) -> Result<Vec<Bar>,
 
     Ok(output)
 }
-

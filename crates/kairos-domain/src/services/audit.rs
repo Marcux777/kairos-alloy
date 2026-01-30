@@ -12,4 +12,3 @@ pub struct AuditEvent {
     pub error: Option<String>,
     pub details: serde_json::Value,
 }
-

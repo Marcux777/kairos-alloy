@@ -258,20 +258,11 @@ pub fn align_with_bars(
     sentiment: &[SentimentPoint],
     sentiment_lag_seconds: i64,
 ) -> Vec<Option<SentimentPoint>> {
-    let mut map: BTreeMap<i64, SentimentPoint> = BTreeMap::new();
-    for point in sentiment {
-        map.insert(point.timestamp, point.clone());
-    }
-
-    bar_timestamps
-        .iter()
-        .map(|ts| {
-            let cutoff = ts.saturating_sub(sentiment_lag_seconds);
-            map.range(..=cutoff)
-                .next_back()
-                .map(|(_, point)| point.clone())
-        })
-        .collect()
+    kairos_domain::services::sentiment::align_with_bars(
+        bar_timestamps,
+        sentiment,
+        sentiment_lag_seconds,
+    )
 }
 
 fn parse_timestamp(value: &str) -> Result<i64, String> {
