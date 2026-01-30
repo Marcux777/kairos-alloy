@@ -1729,4 +1729,288 @@ mod tests {
             .any(|e| e.error.as_deref() == Some("fok_unfillable"));
         assert!(has_fok_cancel);
     }
+
+    #[test]
+    fn complete_ioc_cancels_if_not_touched_on_first_active_bar() {
+        let bars = vec![
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 1,
+                open: 10.0,
+                high: 10.0,
+                low: 10.0,
+                close: 10.0,
+                volume: 10.0,
+            },
+            // Limit price is 10.0; low stays above => not touched => IOC cancel.
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 2,
+                open: 11.0,
+                high: 12.0,
+                low: 11.0,
+                close: 11.0,
+                volume: 10.0,
+            },
+        ];
+
+        let execution = ExecutionConfig {
+            model: ExecutionModel::Complete,
+            latency_bars: 1,
+            buy_kind: OrderKind::Limit,
+            sell_kind: OrderKind::Market,
+            price_reference: PriceReference::Close,
+            limit_offset_bps: 0.0,
+            stop_offset_bps: 0.0,
+            spread_bps: 0.0,
+            slippage_bps: 0.0,
+            max_fill_pct_of_volume: 1.0,
+            tif: TimeInForce::Ioc,
+            expire_after_bars: None,
+        };
+
+        let data = DummyDataSource::new(bars);
+        let strategy = BuyOnceStrategy::new(1.0);
+        let mut runner = BacktestRunner::new_with_execution(
+            "ioc".to_string(),
+            strategy,
+            data,
+            RiskLimits::default(),
+            10_000.0,
+            MetricsConfig::default(),
+            0.0,
+            "BTCUSD".to_string(),
+            OrderSizeMode::Quantity,
+            execution,
+        );
+        let result = runner.run();
+
+        assert!(result.trades.is_empty());
+        let has_ioc_cancel = result
+            .audit_events
+            .iter()
+            .any(|e| e.error.as_deref() == Some("ioc_unfilled"));
+        assert!(has_ioc_cancel);
+    }
+
+    #[test]
+    fn complete_gtc_expires_after_bars() {
+        let bars = vec![
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 1,
+                open: 10.0,
+                high: 10.0,
+                low: 10.0,
+                close: 10.0,
+                volume: 10.0,
+            },
+            // Order becomes active here (ready_bar_index=2) but never touched.
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 2,
+                open: 11.0,
+                high: 12.0,
+                low: 11.0,
+                close: 11.0,
+                volume: 10.0,
+            },
+            // Expiration triggers at bar_index=3 (> expires_bar_index=2).
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 3,
+                open: 11.0,
+                high: 12.0,
+                low: 11.0,
+                close: 11.0,
+                volume: 10.0,
+            },
+        ];
+
+        let execution = ExecutionConfig {
+            model: ExecutionModel::Complete,
+            latency_bars: 1,
+            buy_kind: OrderKind::Limit,
+            sell_kind: OrderKind::Market,
+            price_reference: PriceReference::Close,
+            limit_offset_bps: 0.0,
+            stop_offset_bps: 0.0,
+            spread_bps: 0.0,
+            slippage_bps: 0.0,
+            max_fill_pct_of_volume: 1.0,
+            tif: TimeInForce::Gtc,
+            expire_after_bars: Some(1),
+        };
+
+        let data = DummyDataSource::new(bars);
+        let strategy = BuyOnceStrategy::new(1.0);
+        let mut runner = BacktestRunner::new_with_execution(
+            "expire".to_string(),
+            strategy,
+            data,
+            RiskLimits::default(),
+            10_000.0,
+            MetricsConfig::default(),
+            0.0,
+            "BTCUSD".to_string(),
+            OrderSizeMode::Quantity,
+            execution,
+        );
+        let result = runner.run();
+
+        assert!(result.trades.is_empty());
+        let has_expired = result
+            .audit_events
+            .iter()
+            .any(|e| e.error.as_deref() == Some("expired"));
+        assert!(has_expired);
+    }
+
+    #[test]
+    fn risk_position_limit_rejects_buy() {
+        let bars = vec![Bar {
+            symbol: "BTCUSD".to_string(),
+            timestamp: 1,
+            open: 10.0,
+            high: 10.0,
+            low: 10.0,
+            close: 10.0,
+            volume: 10.0,
+        }];
+
+        let data = DummyDataSource::new(bars);
+        let strategy = BuyOnceStrategy::new(1.0);
+        let limits = RiskLimits {
+            max_position_qty: 0.5,
+            max_drawdown_pct: 1.0,
+            max_exposure_pct: 1.0,
+        };
+        let mut runner = BacktestRunner::new(
+            "risk_pos".to_string(),
+            strategy,
+            data,
+            limits,
+            10_000.0,
+            MetricsConfig::default(),
+            0.0,
+            0.0,
+            "BTCUSD".to_string(),
+            OrderSizeMode::Quantity,
+        );
+        let result = runner.run();
+
+        assert!(result.trades.is_empty());
+        let rejected = result.audit_events.iter().any(|e| {
+            e.stage == "order"
+                && e.action == "reject"
+                && e.error.as_deref() == Some("position_limit")
+        });
+        assert!(rejected);
+    }
+
+    #[test]
+    fn risk_exposure_limit_rejects_buy() {
+        let bars = vec![Bar {
+            symbol: "BTCUSD".to_string(),
+            timestamp: 1,
+            open: 100.0,
+            high: 100.0,
+            low: 100.0,
+            close: 100.0,
+            volume: 10.0,
+        }];
+
+        let data = DummyDataSource::new(bars);
+        let strategy = BuyOnceStrategy::new(10.0);
+        let limits = RiskLimits {
+            max_position_qty: 0.0,
+            max_drawdown_pct: 1.0,
+            max_exposure_pct: 0.05,
+        };
+        let mut runner = BacktestRunner::new(
+            "risk_exp".to_string(),
+            strategy,
+            data,
+            limits,
+            10_000.0,
+            MetricsConfig::default(),
+            0.0,
+            0.0,
+            "BTCUSD".to_string(),
+            OrderSizeMode::Quantity,
+        );
+        let result = runner.run();
+
+        assert!(result.trades.is_empty());
+        let rejected = result.audit_events.iter().any(|e| {
+            e.stage == "order"
+                && e.action == "reject"
+                && e.error.as_deref() == Some("exposure_limit")
+        });
+        assert!(rejected);
+    }
+
+    #[test]
+    fn halts_trading_on_drawdown() {
+        let bars = vec![
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 1,
+                open: 100.0,
+                high: 100.0,
+                low: 100.0,
+                close: 100.0,
+                volume: 100.0,
+            },
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 2,
+                open: 100.0,
+                high: 100.0,
+                low: 50.0,
+                close: 50.0,
+                volume: 100.0,
+            },
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 3,
+                open: 50.0,
+                high: 50.0,
+                low: 50.0,
+                close: 50.0,
+                volume: 100.0,
+            },
+        ];
+
+        let data = DummyDataSource::new(bars);
+        // Buy a large enough size to cause a drawdown breach on the next bar.
+        let strategy = BuyOnceStrategy::new(100.0);
+        let limits = RiskLimits {
+            max_position_qty: 0.0,
+            max_drawdown_pct: 0.2,
+            max_exposure_pct: 1.0,
+        };
+        let mut runner = BacktestRunner::new(
+            "dd".to_string(),
+            strategy,
+            data,
+            limits,
+            10_000.0,
+            MetricsConfig::default(),
+            0.0,
+            0.0,
+            "BTCUSD".to_string(),
+            OrderSizeMode::Quantity,
+        );
+        let result = runner.run();
+
+        let has_halt = result
+            .audit_events
+            .iter()
+            .any(|e| e.stage == "risk" && e.action == "halt_drawdown");
+        assert!(has_halt);
+        assert!(result.audit_events.iter().any(|e| e.stage == "engine"
+            && e.action == "complete"
+            && e.details["halt_trading"] == true));
+    }
 }

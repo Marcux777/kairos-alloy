@@ -169,4 +169,49 @@ mod tests {
         let obs = builder.update(&bar(10.0), None);
         assert!(obs.values[1] >= 0.0);
     }
+
+    #[test]
+    fn return_mode_log_vs_pct() {
+        let mut pct = FeatureBuilder::new(FeatureConfig {
+            return_mode: ReturnMode::Pct,
+            sma_windows: vec![],
+            volatility_windows: vec![],
+            rsi_enabled: false,
+        });
+        let mut log = FeatureBuilder::new(FeatureConfig {
+            return_mode: ReturnMode::Log,
+            sma_windows: vec![],
+            volatility_windows: vec![],
+            rsi_enabled: false,
+        });
+
+        pct.update(&bar(100.0), None);
+        log.update(&bar(100.0), None);
+        let pct_obs = pct.update(&bar(110.0), None);
+        let log_obs = log.update(&bar(110.0), None);
+
+        assert!((pct_obs.values[0] - 0.1).abs() < 1e-12);
+        assert!((log_obs.values[0] - (1.1f64).ln()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn rsi_is_bounded_and_finite() {
+        let mut builder = FeatureBuilder::new(FeatureConfig {
+            return_mode: ReturnMode::Pct,
+            sma_windows: vec![],
+            volatility_windows: vec![],
+            rsi_enabled: true,
+        });
+
+        let mut last = None;
+        for i in 0..20 {
+            let price = 100.0 + i as f64;
+            let obs = builder.update(&bar(price), None);
+            last = Some(obs);
+        }
+        let last = last.expect("last obs");
+        let rsi = *last.values.last().expect("rsi value");
+        assert!(rsi.is_finite());
+        assert!((0.0..=100.0).contains(&rsi));
+    }
 }

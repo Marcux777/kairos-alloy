@@ -151,7 +151,7 @@ fn validate_table_name(table: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_table_name;
+    use super::{load_postgres, validate_table_name};
 
     #[test]
     fn validate_table_name_accepts_schema() {
@@ -159,5 +159,35 @@ mod tests {
         assert!(validate_table_name("public.ohlcv_candles").is_ok());
         assert!(validate_table_name("").is_err());
         assert!(validate_table_name("ohlcv;drop").is_err());
+    }
+
+    #[test]
+    fn load_postgres_rejects_invalid_table_name_before_connect() {
+        let err = load_postgres(
+            "postgres://invalid",
+            "ohlcv;drop",
+            "ex",
+            "spot",
+            "BTCUSD",
+            "1m",
+            None,
+        )
+        .expect_err("invalid table name");
+        assert!(err.contains("invalid table name"));
+    }
+
+    #[test]
+    fn load_postgres_errors_on_invalid_db_url() {
+        let err = load_postgres(
+            "not a url",
+            "ohlcv_candles",
+            "ex",
+            "spot",
+            "BTCUSD",
+            "1m",
+            None,
+        )
+        .expect_err("invalid db url should fail fast");
+        assert!(err.contains("failed to connect to postgres"));
     }
 }

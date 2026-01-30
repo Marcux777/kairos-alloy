@@ -309,8 +309,86 @@ impl kairos_domain::repositories::agent::AgentClient for AgentClient {
 
 #[cfg(test)]
 mod tests {
-    use super::AgentClient;
+    use super::{ActionBatchItem, ActionBatchRequest, ActionRequest, AgentClient, PortfolioState};
     use kairos_domain::value_objects::action_type::ActionType;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    fn http_response(status: u16, reason: &str, content_type: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn spawn_server(responses: Vec<String>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let addr = listener.local_addr().expect("local addr");
+
+        thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().expect("accept");
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write response");
+            }
+        });
+
+        format!("http://{}", addr)
+    }
+
+    fn sample_request() -> ActionRequest {
+        ActionRequest {
+            api_version: "v1".to_string(),
+            feature_version: "v1".to_string(),
+            run_id: "run_1".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            symbol: "BTCUSD".to_string(),
+            timeframe: "1m".to_string(),
+            observation: vec![1.0, 2.0, 3.0],
+            portfolio_state: PortfolioState {
+                cash: 1000.0,
+                position_qty: 0.0,
+                position_avg_price: 0.0,
+                equity: 1000.0,
+            },
+        }
+    }
+
+    fn sample_batch() -> ActionBatchRequest {
+        ActionBatchRequest {
+            api_version: "v1".to_string(),
+            feature_version: "v1".to_string(),
+            run_id: "run_1".to_string(),
+            symbol: "BTCUSD".to_string(),
+            timeframe: "1m".to_string(),
+            items: vec![
+                ActionBatchItem {
+                    timestamp: "2026-01-01T00:00:00Z".to_string(),
+                    observation: vec![1.0],
+                    portfolio_state: PortfolioState {
+                        cash: 1000.0,
+                        position_qty: 0.0,
+                        position_avg_price: 0.0,
+                        equity: 1000.0,
+                    },
+                },
+                ActionBatchItem {
+                    timestamp: "2026-01-01T00:00:01Z".to_string(),
+                    observation: vec![2.0],
+                    portfolio_state: PortfolioState {
+                        cash: 1000.0,
+                        position_qty: 0.0,
+                        position_avg_price: 0.0,
+                        equity: 1000.0,
+                    },
+                },
+            ],
+        }
+    }
 
     #[test]
     fn agent_client_fallback_is_hold() {
@@ -325,5 +403,137 @@ mod tests {
         .expect("agent client");
         let response = client.fallback_response();
         assert_eq!(response.action_type, "HOLD");
+    }
+
+    #[test]
+    fn act_retries_on_server_error_then_succeeds() {
+        let ok_body = r#"{"action_type":"HOLD","size":0.0,"confidence":null,"model_version":null,"latency_ms":null}"#;
+        let base_url = spawn_server(vec![
+            http_response(500, "Internal Server Error", "text/plain", "oops"),
+            http_response(200, "OK", "application/json", ok_body),
+        ]);
+
+        let client = AgentClient::new(
+            base_url,
+            500,
+            "v1".to_string(),
+            "v1".to_string(),
+            3,
+            ActionType::Hold,
+        )
+        .expect("agent client");
+
+        let detailed = client.act_detailed(&sample_request());
+        assert_eq!(detailed.info.attempts, 2);
+        assert_eq!(detailed.info.status, Some(200));
+        assert_eq!(detailed.response.as_ref().unwrap().action_type, "HOLD");
+    }
+
+    #[test]
+    fn act_does_not_retry_on_client_error() {
+        let base_url = spawn_server(vec![http_response(
+            400,
+            "Bad Request",
+            "text/plain",
+            "nope",
+        )]);
+
+        let client = AgentClient::new(
+            base_url,
+            500,
+            "v1".to_string(),
+            "v1".to_string(),
+            3,
+            ActionType::Hold,
+        )
+        .expect("agent client");
+
+        let detailed = client.act_detailed(&sample_request());
+        assert_eq!(detailed.info.attempts, 1);
+        assert!(detailed.response.is_none());
+        assert!(detailed
+            .info
+            .error
+            .unwrap_or_default()
+            .contains("status 400"));
+    }
+
+    #[test]
+    fn act_stops_on_invalid_action_response() {
+        let invalid_body = r#"{"action_type":"NOPE","size":0.0,"confidence":null,"model_version":null,"latency_ms":null}"#;
+        let base_url = spawn_server(vec![http_response(
+            200,
+            "OK",
+            "application/json",
+            invalid_body,
+        )]);
+
+        let client = AgentClient::new(
+            base_url,
+            500,
+            "v1".to_string(),
+            "v1".to_string(),
+            3,
+            ActionType::Hold,
+        )
+        .expect("agent client");
+
+        let detailed = client.act_detailed(&sample_request());
+        assert_eq!(detailed.info.attempts, 1);
+        assert!(detailed.response.is_none());
+        assert!(detailed
+            .info
+            .error
+            .unwrap_or_default()
+            .contains("invalid action_type"));
+    }
+
+    #[test]
+    fn act_batch_retries_on_server_error_then_succeeds() {
+        let ok_body = r#"{"items":[{"action_type":"HOLD","size":0.0,"confidence":null,"model_version":null,"latency_ms":null},{"action_type":"HOLD","size":0.0,"confidence":null,"model_version":null,"latency_ms":null}]}"#;
+        let base_url = spawn_server(vec![
+            http_response(500, "Internal Server Error", "text/plain", "oops"),
+            http_response(200, "OK", "application/json", ok_body),
+        ]);
+
+        let client = AgentClient::new(
+            base_url,
+            500,
+            "v1".to_string(),
+            "v1".to_string(),
+            3,
+            ActionType::Hold,
+        )
+        .expect("agent client");
+
+        let detailed = client.act_batch_detailed(&sample_batch());
+        assert_eq!(detailed.info.attempts, 2);
+        assert_eq!(detailed.info.status, Some(200));
+        assert_eq!(detailed.responses.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn act_batch_errors_on_size_mismatch() {
+        let ok_body = r#"{"items":[{"action_type":"HOLD","size":0.0,"confidence":null,"model_version":null,"latency_ms":null}]}"#;
+        let base_url = spawn_server(vec![http_response(200, "OK", "application/json", ok_body)]);
+
+        let client = AgentClient::new(
+            base_url,
+            500,
+            "v1".to_string(),
+            "v1".to_string(),
+            0,
+            ActionType::Hold,
+        )
+        .expect("agent client");
+
+        let detailed = client.act_batch_detailed(&sample_batch());
+        assert_eq!(detailed.info.attempts, 1);
+        assert!(detailed.responses.is_none());
+        assert!(detailed
+            .info
+            .error
+            .unwrap_or_default()
+            .contains("batch size mismatch"));
     }
 }

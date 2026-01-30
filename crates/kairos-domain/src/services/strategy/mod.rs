@@ -334,3 +334,168 @@ impl Strategy for StrategyKind {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{AgentStrategy, BuyAndHold, SimpleSma, Strategy};
+    use crate::entities::portfolio::Portfolio;
+    use crate::repositories::agent::AgentClient as AgentPort;
+    use crate::services::agent::{
+        ActionBatchRequest, ActionBatchResponse, ActionRequest, ActionResponse,
+    };
+    use crate::services::features::{FeatureBuilder, FeatureConfig, ReturnMode};
+    use crate::services::sentiment::SentimentPoint;
+    use crate::value_objects::action_type::ActionType;
+    use crate::value_objects::bar::Bar;
+    use crate::value_objects::side::Side;
+    use std::cell::Cell;
+    use std::cell::RefCell;
+
+    fn bar(ts: i64, close: f64) -> Bar {
+        Bar {
+            symbol: "BTCUSD".to_string(),
+            timestamp: ts,
+            open: close,
+            high: close,
+            low: close,
+            close,
+            volume: 1.0,
+        }
+    }
+
+    #[test]
+    fn buy_and_hold_buys_once_then_holds() {
+        let mut strategy = BuyAndHold::new(1.0);
+        let portfolio = Portfolio::new_with_cash(1000.0);
+
+        let a1 = strategy.on_bar(&bar(1, 10.0), &portfolio);
+        assert_eq!(a1.action_type, ActionType::Buy);
+        let a2 = strategy.on_bar(&bar(2, 10.0), &portfolio);
+        assert_eq!(a2.action_type, ActionType::Hold);
+    }
+
+    #[test]
+    fn simple_sma_buys_on_cross_and_sells_on_cross_down() {
+        let mut strategy = SimpleSma::new(2, 3);
+        let mut portfolio = Portfolio::new_with_cash(10_000.0);
+        let symbol = "BTCUSD";
+
+        let prices = [1.0, 1.0, 1.0, 3.0, 0.5, 0.1];
+        let mut saw_buy = false;
+        let mut saw_sell = false;
+
+        for (idx, price) in prices.iter().copied().enumerate() {
+            let ts = (idx + 1) as i64;
+            let action = strategy.on_bar(&bar(ts, price), &portfolio);
+            match action.action_type {
+                ActionType::Buy => {
+                    saw_buy = true;
+                    portfolio.apply_fill(symbol, Side::Buy, 1.0, price, 0.0);
+                }
+                ActionType::Sell => {
+                    saw_sell = true;
+                    portfolio.apply_fill(symbol, Side::Sell, action.size, price, 0.0);
+                }
+                ActionType::Hold => {}
+            }
+        }
+
+        assert!(saw_buy);
+        assert!(saw_sell);
+        assert_eq!(portfolio.position_qty(symbol), 0.0);
+    }
+
+    #[derive(Default)]
+    struct MockAgent {
+        calls: Cell<usize>,
+        last_observation_len: RefCell<Option<usize>>,
+    }
+
+    impl AgentPort for MockAgent {
+        fn act(&self, request: &ActionRequest) -> Result<ActionResponse, String> {
+            let n = self.calls.get() + 1;
+            self.calls.set(n);
+            *self.last_observation_len.borrow_mut() = Some(request.observation.len());
+
+            if n == 1 {
+                Ok(ActionResponse {
+                    action_type: "BUY".to_string(),
+                    size: 1.0,
+                    confidence: None,
+                    model_version: None,
+                    latency_ms: None,
+                })
+            } else {
+                Err("agent_down".to_string())
+            }
+        }
+
+        fn act_batch(&self, _request: &ActionBatchRequest) -> Result<ActionBatchResponse, String> {
+            Ok(ActionBatchResponse { items: Vec::new() })
+        }
+    }
+
+    #[test]
+    fn agent_strategy_calls_agent_and_falls_back_on_error() {
+        let agent = Box::new(MockAgent::default());
+        let builder = FeatureBuilder::new(FeatureConfig {
+            return_mode: ReturnMode::Pct,
+            sma_windows: vec![2],
+            volatility_windows: vec![2],
+            rsi_enabled: false,
+        });
+        let sentiment = vec![
+            Some(SentimentPoint {
+                timestamp: 1,
+                values: vec![0.1, 0.2],
+            }),
+            Some(SentimentPoint {
+                timestamp: 2,
+                values: vec![0.3, 0.4],
+            }),
+        ];
+
+        let mut strategy = AgentStrategy::new(
+            "run1".to_string(),
+            "BTCUSD".to_string(),
+            "1min".to_string(),
+            "v1".to_string(),
+            "v1".to_string(),
+            "http://agent".to_string(),
+            ActionType::Hold,
+            agent,
+            builder,
+            sentiment,
+        );
+
+        let mut portfolio = Portfolio::new_with_cash(1000.0);
+        let a1 = strategy.on_bar(&bar(1, 10.0), &portfolio);
+        assert_eq!(a1.action_type, ActionType::Buy);
+
+        // Simulate a fill to affect portfolio_state on the next call.
+        portfolio.apply_fill("BTCUSD", Side::Buy, 1.0, 10.0, 0.0);
+
+        let a2 = strategy.on_bar(&bar(2, 10.0), &portfolio);
+        assert_eq!(a2.action_type, ActionType::Hold);
+
+        let events = strategy.drain_audit_events();
+        assert!(events
+            .iter()
+            .any(|e| e.stage == "agent" && e.action == "call"));
+        assert!(events
+            .iter()
+            .any(|e| e.stage == "agent" && e.action == "error"));
+        assert!(events
+            .iter()
+            .any(|e| e.stage == "agent" && e.action == "fallback"));
+
+        // return + 1 SMA + 1 vol + 2 sentiment fields.
+        let obs_len = events
+            .iter()
+            .find(|e| e.stage == "agent" && e.action == "call")
+            .and_then(|e| e.details.get("observation_len"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        assert_eq!(obs_len, 5);
+    }
+}

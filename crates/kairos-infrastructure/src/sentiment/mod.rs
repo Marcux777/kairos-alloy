@@ -282,7 +282,10 @@ fn parse_timestamp(value: &str) -> Result<i64, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{align_with_bars, load_csv, load_json};
+    use super::{
+        align_with_bars, load_csv, load_csv_with_policy, load_json, load_json_with_policy,
+    };
+    use kairos_domain::services::sentiment::MissingValuePolicy;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -341,5 +344,91 @@ mod tests {
         assert_eq!(aligned.len(), 2);
         assert_eq!(aligned[0].as_ref().unwrap().timestamp, 10);
         assert_eq!(aligned[1].as_ref().unwrap().timestamp, 20);
+    }
+
+    #[test]
+    fn load_csv_errors_on_missing_values_by_default() {
+        let tmp_path = unique_tmp_path("sentiment_missing_default.csv");
+        let csv_data = "timestamp_utc,score\n\
+2026-01-01T00:00:00Z,0.5\n\
+2026-01-01T00:00:01Z,\n";
+        fs::write(&tmp_path, csv_data).expect("write csv");
+
+        let err = load_csv(&tmp_path).expect_err("missing should error");
+        assert!(err.contains("missing sentiment value"));
+    }
+
+    #[test]
+    fn load_csv_zero_fill_replaces_missing_values() {
+        let tmp_path = unique_tmp_path("sentiment_zero_fill.csv");
+        let csv_data = "timestamp_utc,score\n\
+2026-01-01T00:00:00Z,0.5\n\
+2026-01-01T00:00:01Z,\n";
+        fs::write(&tmp_path, csv_data).expect("write csv");
+
+        let (points, report) =
+            load_csv_with_policy(&tmp_path, MissingValuePolicy::ZeroFill).expect("load csv");
+        assert_eq!(points.len(), 2);
+        assert_eq!(report.dropped_rows, 0);
+        assert_eq!(points[1].values[0], 0.0);
+    }
+
+    #[test]
+    fn load_csv_forward_fill_replaces_missing_values() {
+        let tmp_path = unique_tmp_path("sentiment_forward_fill.csv");
+        let csv_data = "timestamp_utc,score\n\
+2026-01-01T00:00:00Z,0.5\n\
+2026-01-01T00:00:01Z,\n";
+        fs::write(&tmp_path, csv_data).expect("write csv");
+
+        let (points, _report) =
+            load_csv_with_policy(&tmp_path, MissingValuePolicy::ForwardFill).expect("load csv");
+        assert_eq!(points.len(), 2);
+        assert_eq!(points[1].values[0], 0.5);
+    }
+
+    #[test]
+    fn load_csv_drop_row_omits_rows_with_missing_values() {
+        let tmp_path = unique_tmp_path("sentiment_drop_row.csv");
+        let csv_data = "timestamp_utc,score\n\
+2026-01-01T00:00:00Z,0.5\n\
+2026-01-01T00:00:01Z,\n";
+        fs::write(&tmp_path, csv_data).expect("write csv");
+
+        let (points, report) =
+            load_csv_with_policy(&tmp_path, MissingValuePolicy::DropRow).expect("load csv");
+        assert_eq!(points.len(), 1);
+        assert_eq!(report.dropped_rows, 1);
+    }
+
+    #[test]
+    fn load_json_forward_fill_replaces_missing_values() {
+        let tmp_path = unique_tmp_path("sentiment_json_forward_fill.json");
+        let json_data = r#"[
+  {"timestamp_utc": "2026-01-01T00:00:00Z", "score": 0.7},
+  {"timestamp_utc": "2026-01-01T00:00:01Z"}
+]"#;
+        fs::write(&tmp_path, json_data).expect("write json");
+
+        let (points, report) =
+            load_json_with_policy(&tmp_path, MissingValuePolicy::ForwardFill).expect("load json");
+        assert_eq!(points.len(), 2);
+        assert_eq!(report.dropped_rows, 0);
+        assert_eq!(points[1].values[0], 0.7);
+    }
+
+    #[test]
+    fn load_json_drop_row_omits_rows_with_missing_values() {
+        let tmp_path = unique_tmp_path("sentiment_json_drop_row.json");
+        let json_data = r#"[
+  {"timestamp_utc": "2026-01-01T00:00:00Z", "score": 0.7},
+  {"timestamp_utc": "2026-01-01T00:00:01Z"}
+]"#;
+        fs::write(&tmp_path, json_data).expect("write json");
+
+        let (points, report) =
+            load_json_with_policy(&tmp_path, MissingValuePolicy::DropRow).expect("load json");
+        assert_eq!(points.len(), 1);
+        assert_eq!(report.dropped_rows, 1);
     }
 }

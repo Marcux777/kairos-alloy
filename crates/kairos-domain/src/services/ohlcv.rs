@@ -1,6 +1,6 @@
 use crate::value_objects::bar::Bar;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct DataQualityReport {
     pub duplicates: usize,
     pub gaps: usize,
