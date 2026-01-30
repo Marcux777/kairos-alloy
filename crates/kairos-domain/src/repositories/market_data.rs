@@ -1,4 +1,5 @@
 use crate::value_objects::bar::Bar;
+use crate::services::ohlcv::DataQualityReport;
 
 #[derive(Debug, Clone)]
 pub struct OhlcvQuery {
@@ -10,6 +11,5 @@ pub struct OhlcvQuery {
 }
 
 pub trait MarketDataRepository {
-    fn load_ohlcv(&self, query: &OhlcvQuery) -> Result<Vec<Bar>, String>;
+    fn load_ohlcv(&self, query: &OhlcvQuery) -> Result<(Vec<Bar>, DataQualityReport), String>;
 }
-

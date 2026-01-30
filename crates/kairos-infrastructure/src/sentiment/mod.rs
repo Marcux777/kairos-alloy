@@ -5,6 +5,25 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::Path;
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FilesystemSentimentRepository;
+
+impl kairos_domain::repositories::sentiment::SentimentRepository for FilesystemSentimentRepository {
+    fn load_sentiment(
+        &self,
+        query: &kairos_domain::repositories::sentiment::SentimentQuery,
+    ) -> Result<(Vec<SentimentPoint>, SentimentReport), String> {
+        match query.format {
+            kairos_domain::repositories::sentiment::SentimentFormat::Csv => {
+                load_csv_with_policy(query.path.as_path(), query.missing_policy)
+            }
+            kairos_domain::repositories::sentiment::SentimentFormat::Json => {
+                load_json_with_policy(query.path.as_path(), query.missing_policy)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct SentimentJsonRecord {
     pub timestamp_utc: String,
@@ -333,4 +352,3 @@ mod tests {
         assert_eq!(aligned[1].as_ref().unwrap().timestamp, 20);
     }
 }
-

@@ -47,7 +47,7 @@ pub(super) fn run_bench(
         let high = open.max(close) * 1.001;
         let low = open.min(close) * 0.999;
         let volume = 1000.0 + ((i as f64) * 0.01).sin().abs() * 100.0;
-        synthetic.push(kairos_core::types::Bar {
+        synthetic.push(kairos_domain::value_objects::bar::Bar {
             symbol: symbol.to_string(),
             timestamp: t,
             open,
@@ -76,7 +76,7 @@ pub(super) fn run_bench(
         },
         bars
     );
-    let size_mode = kairos_core::backtest::OrderSizeMode::Quantity;
+    let size_mode = kairos_domain::services::engine::backtest::OrderSizeMode::Quantity;
 
     let start = Instant::now();
     let results = match bench_mode {
@@ -101,18 +101,18 @@ pub(super) fn run_bench(
                 builder: features::FeatureBuilder,
             }
 
-            impl kairos_core::strategy::Strategy for FeatureBenchStrategy {
+            impl kairos_domain::services::strategy::Strategy for FeatureBenchStrategy {
                 fn name(&self) -> &str {
                     "feature_bench_hold"
                 }
 
                 fn on_bar(
                     &mut self,
-                    bar: &kairos_core::types::Bar,
-                    _portfolio: &kairos_core::portfolio::Portfolio,
-                ) -> kairos_core::types::Action {
+                    bar: &kairos_domain::value_objects::bar::Bar,
+                    _portfolio: &kairos_domain::entities::portfolio::Portfolio,
+                ) -> kairos_domain::value_objects::action::Action {
                     let _obs = self.builder.update(bar, None);
-                    kairos_core::types::Action::hold()
+                    kairos_domain::value_objects::action::Action::hold()
                 }
             }
 

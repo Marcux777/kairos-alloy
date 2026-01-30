@@ -145,10 +145,10 @@ impl AgentClient {
         }
     }
 
-    pub fn act_batch(&self, requests: &[ActionRequest]) -> Result<Vec<ActionResponse>, String> {
-        let result = self.act_batch_detailed(requests);
+    pub fn act_batch(&self, batch: &ActionBatchRequest) -> Result<ActionBatchResponse, String> {
+        let result = self.act_batch_detailed(batch);
         match result.responses {
-            Some(responses) => Ok(responses),
+            Some(items) => Ok(ActionBatchResponse { items }),
             None => Err(result
                 .info
                 .error
@@ -156,8 +156,8 @@ impl AgentClient {
         }
     }
 
-    pub fn act_batch_detailed(&self, requests: &[ActionRequest]) -> AgentBatchCallResult {
-        if requests.is_empty() {
+    pub fn act_batch_detailed(&self, batch: &ActionBatchRequest) -> AgentBatchCallResult {
+        if batch.items.is_empty() {
             return AgentBatchCallResult {
                 info: AgentCallInfo {
                     attempts: 0,
@@ -175,62 +175,19 @@ impl AgentClient {
         let mut last_status: Option<u16> = None;
         let mut last_error: Option<String> = None;
 
-        let first = &requests[0];
-        if requests.iter().any(|r| {
-            r.api_version != first.api_version
-                || r.feature_version != first.feature_version
-                || r.run_id != first.run_id
-                || r.symbol != first.symbol
-                || r.timeframe != first.timeframe
-        }) {
-            return AgentBatchCallResult {
-                info: AgentCallInfo {
-                    attempts: 0,
-                    duration_ms: 0,
-                    status: None,
-                    error: Some(
-                        "batch requests must share api_version/feature_version/run_id/symbol/timeframe"
-                            .to_string(),
-                    ),
-                },
-                responses: None,
-            };
-        }
-
-        let batch = ActionBatchRequest {
-            api_version: first.api_version.clone(),
-            feature_version: first.feature_version.clone(),
-            run_id: first.run_id.clone(),
-            symbol: first.symbol.clone(),
-            timeframe: first.timeframe.clone(),
-            items: requests
-                .iter()
-                .map(|r| kairos_domain::services::agent::ActionBatchItem {
-                    timestamp: r.timestamp.clone(),
-                    observation: r.observation.clone(),
-                    portfolio_state: PortfolioState {
-                        cash: r.portfolio_state.cash,
-                        position_qty: r.portfolio_state.position_qty,
-                        position_avg_price: r.portfolio_state.position_avg_price,
-                        equity: r.portfolio_state.equity,
-                    },
-                })
-                .collect(),
-        };
-
         while attempts <= self.retries {
             attempts += 1;
-            let response = self.client.post(&endpoint).json(&batch).send();
+            let response = self.client.post(&endpoint).json(batch).send();
             match response {
                 Ok(resp) => {
                     last_status = Some(resp.status().as_u16());
                     if resp.status() == StatusCode::OK {
                         match resp.json::<ActionBatchResponse>() {
                             Ok(parsed) => {
-                                if parsed.items.len() != requests.len() {
+                                if parsed.items.len() != batch.items.len() {
                                     last_error = Some(format!(
                                         "agent batch size mismatch: expected {} items, got {}",
-                                        requests.len(),
+                                        batch.items.len(),
                                         parsed.items.len()
                                     ));
                                     break;
@@ -336,6 +293,16 @@ fn validate_action_response(response: &ActionResponse) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+impl kairos_domain::repositories::agent::AgentClient for AgentClient {
+    fn act(&self, request: &ActionRequest) -> Result<ActionResponse, String> {
+        AgentClient::act(self, request)
+    }
+
+    fn act_batch(&self, request: &ActionBatchRequest) -> Result<ActionBatchResponse, String> {
+        AgentClient::act_batch(self, request)
+    }
 }
 
 #[cfg(test)]

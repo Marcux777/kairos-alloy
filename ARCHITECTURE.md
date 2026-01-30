@@ -1,21 +1,24 @@
 # Architecture
 
 ## Overview
-Kairos Alloy is a Rust-first system organized as a workspace with three crates:
+Kairos Alloy is a Rust-first system organized as a workspace with five crates:
 
-- `kairos-core`: engine, data types, and backtest logic
-- `kairos-cli`: command-line interface that drives core workflows
+- `kairos-domain`: domain types + pure engine logic (no IO)
+- `kairos-application`: use cases / orchestration (WIP)
+- `kairos-infrastructure`: adapters (Postgres, filesystem, HTTP)
+- `kairos-cli`: command-line interface
 - `kairos-ingest`: data ingestion (KuCoin OHLCV → PostgreSQL) + DB migrations
 
 ## Current vs. Target
 
-### Current (MVP)
-The MVP is intentionally pragmatic: `kairos-core` includes both domain logic and some infrastructure concerns (PostgreSQL access for OHLCV, filesystem access for CSV/JSON sentiment, and HTTP for the external agent).
-
-This is acceptable for MVP validation, but it couples the domain to IO details, which makes deeper unit testing and future adapter swaps (new exchanges, new storage engines, new agent transports) harder than necessary.
+### Current
+The workspace is already structured as **Ports & Adapters**:
+- domain logic and the backtest engine live in `kairos-domain`
+- IO adapters live in `kairos-infrastructure`
+- `kairos-cli` orchestrates workflows (until the application layer is fully implemented)
 
 ### Target (recommended): Hexagonal (Ports & Adapters) + DDD-inspired layers
-We will evolve the workspace to a **Ports & Adapters** structure:
+We will keep evolving the workspace toward a stricter **Ports & Adapters** structure:
 
 - **Domain**: pure business rules and invariants (no IO).
 - **Application**: use cases orchestrating domain + ports.
@@ -26,20 +29,14 @@ Implementation guide (decision-complete): `docs/architecture/hexagonal_ddd.md`.
 
 ## Crate Responsibilities
 
-### kairos-core
-Core domain logic and engine boundaries.
+### kairos-domain
+Domain model and deterministic engine logic.
 
-Modules:
-- `data`: OHLCV/sentiment loaders and alignment helpers
-- `features`: feature pipeline producing `observation[]`
-- `engine`: backtest runner + market data sources
-- `portfolio`: positions, balances, and accounting
-- `risk`: risk controls and limits
-- `agents`: HTTP client + request/response types for the external agent
-- `strategy`: baseline strategies + agent-backed strategy
-- `metrics`: performance metrics (net profit, sharpe, max drawdown)
-- `report`: artifacts (CSV/JSON/HTML) and audit logs (JSONL)
-- `types`: shared base types (bar, tick, order, trade, equity point)
+Includes:
+- `value_objects`: `Bar`, `Trade`, `EquityPoint`, `Side`, `ActionType`, `Action`, `Timeframe`
+- `entities`: `Portfolio`, `RiskLimits`, metrics types
+- `services`: feature pipeline, strategy trait + strategies, engine/backtest
+- `repositories`: ports/traits for IO boundaries
 
 ### kairos-cli
 Entry point for users to run backtests and manage configs.
@@ -54,15 +51,21 @@ Ingests OHLCV from KuCoin and persists it in PostgreSQL.
 
 It also applies SQL migrations from `migrations/`.
 
+### kairos-application
+Use cases (WIP): intended home for orchestration like `RunBacktest`, `RunPaper`, `ValidateData`, `GenerateReport`.
+
+### kairos-infrastructure
+Concrete adapters for Postgres, filesystem, HTTP agents, and artifact/report writing.
+
 ## High-Level Flow
 1. CLI loads config
-2. CLI initializes core engine and strategy
+2. CLI initializes adapters + strategy
 3. Backtest runner processes market data
 4. Metrics are computed and reported
 
 ## Invariants
-- Core should not depend on CLI
-- Data structures in `types` remain stable across the MVP
+- Domain should not depend on CLI / adapters
+- Domain data structures remain stable across the MVP
 - Determinism is preserved via fixed seeds and versioned fixtures
 
 ## Dependency rules (target)

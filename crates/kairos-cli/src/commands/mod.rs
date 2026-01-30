@@ -1,16 +1,21 @@
 use crate::config::{load_config, AgentMode, Config};
-use kairos_core::backtest::{BacktestResults, BacktestRunner};
-use kairos_core::data::{ohlcv, sentiment};
-use kairos_core::market_data::{MarketDataSource, VecBarSource};
-use kairos_core::metrics::MetricsConfig;
-use kairos_core::report::{
+use kairos_application::meta::engine_name;
+use kairos_domain::entities::metrics::MetricsConfig;
+use kairos_domain::entities::risk::RiskLimits;
+use kairos_domain::services::audit::AuditEvent;
+use kairos_domain::services::engine::backtest::{BacktestResults, BacktestRunner};
+use kairos_domain::services::market_data_source::{MarketDataSource, VecBarSource};
+use kairos_domain::services::strategy::{AgentStrategy, BuyAndHold, HoldStrategy, SimpleSma, StrategyKind};
+use kairos_domain::value_objects::equity_point::EquityPoint;
+use kairos_infrastructure::agents::AgentClient;
+use kairos_infrastructure::market_data::ohlcv;
+use kairos_infrastructure::reporting::{
     read_equity_csv, read_trades_csv, recompute_summary, write_audit_jsonl, write_equity_csv,
-    write_summary_html, write_summary_json, write_trades_csv, AuditEvent, SummaryMeta,
+    write_summary_html, write_summary_json, write_trades_csv, SummaryMeta,
 };
-use kairos_core::risk::RiskLimits;
-use kairos_core::strategy::{AgentStrategy, BuyAndHold, HoldStrategy, SimpleSma, StrategyKind};
-use kairos_core::types::EquityPoint;
-use kairos_core::{agents::AgentClient, engine_name, features};
+use kairos_infrastructure::sentiment;
+use kairos_domain::services::features;
+use kairos_domain::services::ohlcv::{data_quality_from_bars, resample_bars};
 use std::env;
 use std::path::PathBuf;
 use std::thread;
@@ -109,8 +114,8 @@ fn run_validate(config_path: PathBuf, strict: bool, out: Option<PathBuf>) -> Res
                 source_timeframe_label, timeframe_label
             ));
             }
-            let resampled_bars = ohlcv::resample_bars(&source_bars, expected_step)?;
-            let report = ohlcv::data_quality_from_bars(&resampled_bars, Some(expected_step));
+            let resampled_bars = resample_bars(&source_bars, expected_step)?;
+            let report = data_quality_from_bars(&resampled_bars, Some(expected_step));
             (report, Some(source_report), resampled_bars.len(), true)
         } else {
             (source_report, None, source_rows, false)
@@ -285,15 +290,15 @@ fn run_report(input: PathBuf) -> Result<(), String> {
                     },
                     "execution": {
                         "model": match execution.model {
-                            kairos_core::engine::execution::ExecutionModel::Simple => "simple",
-                            kairos_core::engine::execution::ExecutionModel::Complete => "complete",
+                            kairos_domain::services::engine::execution::ExecutionModel::Simple => "simple",
+                            kairos_domain::services::engine::execution::ExecutionModel::Complete => "complete",
                         },
                         "latency_bars": execution.latency_bars,
                         "buy_kind": format!("{:?}", execution.buy_kind).to_lowercase(),
                         "sell_kind": format!("{:?}", execution.sell_kind).to_lowercase(),
                         "price_reference": match execution.price_reference {
-                            kairos_core::engine::execution::PriceReference::Close => "close",
-                            kairos_core::engine::execution::PriceReference::Open => "open",
+                            kairos_domain::services::engine::execution::PriceReference::Close => "close",
+                            kairos_domain::services::engine::execution::PriceReference::Open => "open",
                         },
                         "limit_offset_bps": execution.limit_offset_bps,
                         "stop_offset_bps": execution.stop_offset_bps,
@@ -502,8 +507,8 @@ fn print_config_summary(
     println!(
         "execution: model={} latency_bars={} buy_kind={} sell_kind={} tif={} max_fill_pct_of_volume={} spread_bps={} slippage_bps={}",
         match exec.model {
-            kairos_core::engine::execution::ExecutionModel::Simple => "simple",
-            kairos_core::engine::execution::ExecutionModel::Complete => "complete",
+            kairos_domain::services::engine::execution::ExecutionModel::Simple => "simple",
+            kairos_domain::services::engine::execution::ExecutionModel::Complete => "complete",
         },
         exec.latency_bars,
         format!("{:?}", exec.buy_kind).to_lowercase(),
@@ -538,9 +543,9 @@ fn print_config_summary(
         config.agent.timeout_ms,
         config.agent.retries,
         match config.agent.fallback_action {
-            kairos_core::types::ActionType::Buy => "BUY",
-            kairos_core::types::ActionType::Sell => "SELL",
-            kairos_core::types::ActionType::Hold => "HOLD",
+            kairos_domain::value_objects::action_type::ActionType::Buy => "BUY",
+            kairos_domain::value_objects::action_type::ActionType::Sell => "SELL",
+            kairos_domain::value_objects::action_type::ActionType::Hold => "HOLD",
         },
         config.agent.api_version,
         config.agent.feature_version
@@ -590,8 +595,8 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
             ));
         }
         let resample_start = Instant::now();
-        let resampled_bars = ohlcv::resample_bars(&source_bars, expected_step)?;
-        let report = ohlcv::data_quality_from_bars(&resampled_bars, Some(expected_step));
+        let resampled_bars = resample_bars(&source_bars, expected_step)?;
+        let report = data_quality_from_bars(&resampled_bars, Some(expected_step));
         audit_extras.push(timing_event(
             &config.run.run_id,
             0,
@@ -755,11 +760,15 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
                     agent_url
                 )
             })?;
+            let agent: Box<dyn kairos_domain::repositories::agent::AgentClient> = Box::new(agent);
             StrategyKind::Agent(AgentStrategy::new(
                 config.run.run_id.clone(),
                 config.run.symbol.clone(),
                 config.run.timeframe.clone(),
+                config.agent.api_version.clone(),
                 config.agent.feature_version.clone(),
+                agent_url,
+                fallback_action,
                 agent,
                 builder,
                 aligned_sentiment,
@@ -847,15 +856,15 @@ fn write_outputs(
         },
         "execution": {
             "model": match execution.model {
-                kairos_core::engine::execution::ExecutionModel::Simple => "simple",
-                kairos_core::engine::execution::ExecutionModel::Complete => "complete",
+                kairos_domain::services::engine::execution::ExecutionModel::Simple => "simple",
+                kairos_domain::services::engine::execution::ExecutionModel::Complete => "complete",
             },
             "latency_bars": execution.latency_bars,
             "buy_kind": format!("{:?}", execution.buy_kind).to_lowercase(),
             "sell_kind": format!("{:?}", execution.sell_kind).to_lowercase(),
             "price_reference": match execution.price_reference {
-                kairos_core::engine::execution::PriceReference::Close => "close",
-                kairos_core::engine::execution::PriceReference::Open => "open",
+                kairos_domain::services::engine::execution::PriceReference::Close => "close",
+                kairos_domain::services::engine::execution::PriceReference::Open => "open",
             },
             "limit_offset_bps": execution.limit_offset_bps,
             "stop_offset_bps": execution.stop_offset_bps,
@@ -943,11 +952,11 @@ fn write_outputs(
 }
 
 fn parse_duration_like(value: &str) -> Result<i64, String> {
-    kairos_core::types::timeframe::parse_duration_like_seconds(value)
+    kairos_domain::value_objects::timeframe::parse_duration_like_seconds(value)
 }
 
 fn normalize_timeframe_label(value: &str) -> Result<String, String> {
-    kairos_core::types::timeframe::Timeframe::parse(value).map(|tf| tf.label)
+    kairos_domain::value_objects::timeframe::Timeframe::parse(value).map(|tf| tf.label)
 }
 
 fn summary_meta_from_equity(config: &Config, equity: &[EquityPoint]) -> Option<SummaryMeta> {
@@ -1031,8 +1040,8 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
             ));
         }
         let resample_start = Instant::now();
-        let resampled_bars = ohlcv::resample_bars(&source_bars, expected_step)?;
-        let report = ohlcv::data_quality_from_bars(&resampled_bars, Some(expected_step));
+        let resampled_bars = resample_bars(&source_bars, expected_step)?;
+        let report = data_quality_from_bars(&resampled_bars, Some(expected_step));
         audit_extras.push(timing_event(
             &config.run.run_id,
             0,
@@ -1188,11 +1197,15 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
                     agent_url
                 )
             })?;
+            let agent: Box<dyn kairos_domain::repositories::agent::AgentClient> = Box::new(agent);
             StrategyKind::Agent(AgentStrategy::new(
                 config.run.run_id.clone(),
                 config.run.symbol.clone(),
                 config.run.timeframe.clone(),
+                config.agent.api_version.clone(),
                 config.agent.feature_version.clone(),
+                agent_url,
+                fallback_action,
                 agent,
                 builder,
                 aligned_sentiment,
@@ -1265,7 +1278,7 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
-fn resolve_size_mode(config: &Config) -> kairos_core::backtest::OrderSizeMode {
+fn resolve_size_mode(config: &Config) -> kairos_domain::services::engine::backtest::OrderSizeMode {
     match config
         .orders
         .as_ref()
@@ -1274,16 +1287,16 @@ fn resolve_size_mode(config: &Config) -> kairos_core::backtest::OrderSizeMode {
         .as_deref()
     {
         Some("pct_equity") | Some("equity_pct") | Some("pct") => {
-            kairos_core::backtest::OrderSizeMode::PctEquity
+            kairos_domain::services::engine::backtest::OrderSizeMode::PctEquity
         }
-        _ => kairos_core::backtest::OrderSizeMode::Quantity,
+        _ => kairos_domain::services::engine::backtest::OrderSizeMode::Quantity,
     }
 }
 
 fn resolve_execution_config(
     config: &Config,
-) -> Result<kairos_core::engine::execution::ExecutionConfig, String> {
-    use kairos_core::engine::execution as core_exec;
+) -> Result<kairos_domain::services::engine::execution::ExecutionConfig, String> {
+    use kairos_domain::services::engine::execution as core_exec;
 
     let slippage_bps = config.costs.slippage_bps;
     if !slippage_bps.is_finite() || slippage_bps < 0.0 {
@@ -1388,7 +1401,9 @@ fn resolve_execution_config(
     Ok(cfg)
 }
 
-fn resolve_sentiment_missing_policy(config: &Config) -> sentiment::MissingValuePolicy {
+fn resolve_sentiment_missing_policy(
+    config: &Config,
+) -> kairos_domain::services::sentiment::MissingValuePolicy {
     match config
         .features
         .sentiment_missing
@@ -1398,10 +1413,12 @@ fn resolve_sentiment_missing_policy(config: &Config) -> sentiment::MissingValueP
         .to_lowercase()
         .as_str()
     {
-        "zero" | "zero_fill" => sentiment::MissingValuePolicy::ZeroFill,
-        "ffill" | "forward_fill" => sentiment::MissingValuePolicy::ForwardFill,
-        "drop" | "drop_row" => sentiment::MissingValuePolicy::DropRow,
-        _ => sentiment::MissingValuePolicy::Error,
+        "zero" | "zero_fill" => kairos_domain::services::sentiment::MissingValuePolicy::ZeroFill,
+        "ffill" | "forward_fill" => {
+            kairos_domain::services::sentiment::MissingValuePolicy::ForwardFill
+        }
+        "drop" | "drop_row" => kairos_domain::services::sentiment::MissingValuePolicy::DropRow,
+        _ => kairos_domain::services::sentiment::MissingValuePolicy::Error,
     }
 }
 
@@ -1429,14 +1446,18 @@ fn timing_event(
 }
 
 struct RealtimeBarSource {
-    bars: Vec<kairos_core::types::Bar>,
+    bars: Vec<kairos_domain::value_objects::bar::Bar>,
     index: usize,
     sleep_seconds: i64,
     last_tick: Option<Instant>,
 }
 
 impl RealtimeBarSource {
-    fn new(bars: Vec<kairos_core::types::Bar>, sleep_seconds: i64, replay_scale: u64) -> Self {
+    fn new(
+        bars: Vec<kairos_domain::value_objects::bar::Bar>,
+        sleep_seconds: i64,
+        replay_scale: u64,
+    ) -> Self {
         let scaled = if replay_scale == 0 {
             0
         } else {
@@ -1452,7 +1473,7 @@ impl RealtimeBarSource {
 }
 
 impl MarketDataSource for RealtimeBarSource {
-    fn next_bar(&mut self) -> Option<kairos_core::types::Bar> {
+    fn next_bar(&mut self) -> Option<kairos_domain::value_objects::bar::Bar> {
         if self.index >= self.bars.len() {
             return None;
         }

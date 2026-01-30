@@ -695,7 +695,9 @@ name = "kairos-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
- "kairos-core",
+ "kairos-application",
+ "kairos-domain",
+ "kairos-infrastructure",
  "kairos-ingest",
  "serde",
  "serde_json",
@@ -704,20 +706,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "kairos-core"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "kairos-domain",
- "kairos-infrastructure",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "kairos-domain"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
 ]
@@ -741,7 +733,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "clap",
- "kairos-core",
+ "kairos-domain",
  "reqwest",
  "serde",
  "serde_json",

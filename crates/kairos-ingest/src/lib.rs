@@ -1,6 +1,6 @@
 use chrono::{DateTime, TimeZone, Utc};
 use clap::ValueEnum;
-use kairos_core::types::timeframe::Timeframe;
+use kairos_domain::value_objects::timeframe::Timeframe;
 use reqwest::Client;
 use serde::Deserialize;
 use std::collections::HashSet;

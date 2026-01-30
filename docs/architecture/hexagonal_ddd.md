@@ -14,11 +14,11 @@ This document defines the **target architecture** for Kairos Alloy and a **decis
 - Multi-asset portfolio and derivatives.
 
 ## Current state (MVP recap)
-Right now, `kairos-core` contains:
-- Domain logic (engine/portfolio/risk/metrics/strategy/types)
+Historically, the MVP used a single “core” crate that mixed:
+- domain logic (engine/portfolio/risk/metrics/strategy/types)
 - IO concerns (Postgres OHLCV loader, filesystem sentiment loader, HTTP agent client)
 
-This is “good enough” for MVP but is the coupling we want to remove.
+**Status:** the workspace has since been split into `kairos-domain`, `kairos-infrastructure`, and `kairos-application`, and the old `kairos-core` crate has been removed. The remaining work is to move CLI orchestration into the application layer.
 
 ## Target workspace layout
 
@@ -43,7 +43,7 @@ Enforcement (future): add `cargo deny` / clippy lint rules to avoid domain depen
 ## Domain model (what lives in `kairos-domain`)
 
 ### Value objects / types
-Move (or re-export) from `crates/kairos-core/src/types/*` into:
+Live in:
 - `kairos-domain/src/value_objects/`:
   - `Bar`, `Trade`, `EquityPoint`, `Side`, `ActionType`, `Action`
   - `Timeframe` + parsing helpers
@@ -79,10 +79,10 @@ These events are for:
 
 ## Ports (traits) — the “hexagon boundary”
 
-All ports live in `kairos-domain/src/ports/`.
+All ports live in `kairos-domain/src/repositories/` (traits only; implementations live in `kairos-infrastructure`).
 
 ### Market data (OHLCV)
-`market_data.rs`
+`repositories/market_data.rs`
 ```rust
 pub struct OhlcvQuery {
   pub exchange: String,
@@ -93,12 +93,12 @@ pub struct OhlcvQuery {
 }
 
 pub trait MarketDataRepository {
-  fn load_ohlcv(&self, query: &OhlcvQuery) -> Result<Vec<Bar>, DomainError>;
+  fn load_ohlcv(&self, query: &OhlcvQuery) -> Result<(Vec<Bar>, DataQualityReport), DomainError>;
 }
 ```
 
 ### Sentiment
-`sentiment.rs`
+`repositories/sentiment.rs`
 ```rust
 pub enum SentimentFormat { Csv, Json }
 
@@ -114,7 +114,7 @@ pub trait SentimentRepository {
 ```
 
 ### Agent inference
-`agent.rs`
+`repositories/agent.rs`
 ```rust
 pub trait AgentClient {
   fn act(&self, request: &ActionRequest) -> Result<ActionResponse, DomainError>;
@@ -161,7 +161,12 @@ Each use case:
 
 ## Infrastructure layer (adapters)
 
-All adapters live in `kairos-infrastructure/src/adapters/`.
+Adapters live in `kairos-infrastructure/src/`:
+- `agents/` (HTTP agent client)
+- `persistence/` (Postgres access)
+- `market_data/` (OHLCV CSV + Postgres loader wiring)
+- `sentiment/` (CSV/JSON loaders + alignment)
+- `reporting/` (artifact writers/readers)
 
 ### Postgres OHLCV adapter
 - Implements `MarketDataRepository`
@@ -169,7 +174,7 @@ All adapters live in `kairos-infrastructure/src/adapters/`.
 
 ### Filesystem sentiment adapter
 - Implements `SentimentRepository`
-- Uses existing CSV/JSON parsing logic (moved from `kairos-core/data/sentiment.rs`)
+- Uses CSV/JSON parsing logic in `kairos-infrastructure/src/sentiment/`
 
 ### HTTP agent adapter
 - Implements `AgentClient`
@@ -181,18 +186,15 @@ All adapters live in `kairos-infrastructure/src/adapters/`.
 
 ## Migration plan (incremental, safe)
 
-### Phase 0 — Preparation (no behavior changes)
-1. Add crates skeletons:
-   - `crates/kairos-domain`
-   - `crates/kairos-application`
-   - `crates/kairos-infrastructure`
-2. Keep `kairos-core` as a compatibility façade for now (re-export existing modules), but stop adding new IO features there.
+### Phase 0 — Preparation (completed)
+- Crates created: `crates/kairos-domain`, `crates/kairos-application`, `crates/kairos-infrastructure`
+- `kairos-core` removed from the workspace
 
-### Phase 1 — Extract ports + adapters
-1. Create ports (traits) in `kairos-domain/src/ports/` as above.
-2. Move the Postgres loader from `crates/kairos-core/src/data/ohlcv.rs` into `kairos-infrastructure` and implement `MarketDataRepository`.
-3. Move sentiment loaders from `crates/kairos-core/src/data/sentiment.rs` into `kairos-infrastructure` and implement `SentimentRepository`.
-4. Move HTTP agent client from `crates/kairos-core/src/agents/mod.rs` into `kairos-infrastructure` and implement `AgentClient`.
+### Phase 1 — Extract ports + adapters (completed)
+- Ports are defined in `kairos-domain/src/repositories/`
+- Postgres OHLCV loader lives in `kairos-infrastructure/src/persistence/`
+- Sentiment loaders live in `kairos-infrastructure/src/sentiment/`
+- HTTP agent adapter lives in `kairos-infrastructure/src/agents/`
 
 Acceptance criteria:
 - `kairos-domain` does not depend on IO crates.
@@ -200,8 +202,7 @@ Acceptance criteria:
 
 ### Phase 2 — Introduce application use cases
 1. Implement `RunBacktest` and `ValidateData` in `kairos-application`.
-2. Update `kairos-cli` to call application use cases instead of directly calling `kairos-core`.
-3. Keep `kairos-core` temporarily, but gradually route through application layer.
+2. Update `kairos-cli` to call application use cases instead of orchestrating directly.
 
 Acceptance criteria:
 - CLI behavior unchanged (golden files / integration tests remain green).
@@ -214,13 +215,11 @@ Acceptance criteria:
 Acceptance criteria:
 - Deterministic replay possible for a single run using stored events + market data.
 
-### Phase 4 — Remove `kairos-core` façade (optional)
-Once all consumers depend on domain/application/infrastructure:
-- delete or freeze `kairos-core` (or rename it to `kairos-domain` if desired).
+### Phase 4 — Remove legacy core (completed)
+- `kairos-core` has been removed from the workspace; consumers depend on `kairos-domain` / `kairos-infrastructure` (and `kairos-application` as it grows).
 
 ## Testing strategy (target)
 - Unit tests for `kairos-domain`: pure deterministic tests, no DB/network/files.
 - Unit tests for `kairos-application`: ports mocked in-memory.
 - Integration tests (PRD20): real Postgres + mock KuCoin HTTP + end-to-end CLI.
 - Contract tests for agent HTTP schemas (v1 + optional batch).
-

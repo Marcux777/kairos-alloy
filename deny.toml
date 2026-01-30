@@ -18,8 +18,10 @@ allow = [
 ]
 confidence-threshold = 0.8
 exceptions = [
-  { crate = "kairos-core", allow = ["LicenseRef-Proprietary"] },
   { crate = "kairos-cli", allow = ["LicenseRef-Proprietary"] },
+  { crate = "kairos-domain", allow = ["LicenseRef-Proprietary"] },
+  { crate = "kairos-application", allow = ["LicenseRef-Proprietary"] },
+  { crate = "kairos-infrastructure", allow = ["LicenseRef-Proprietary"] },
   { crate = "kairos-ingest", allow = ["LicenseRef-Proprietary"] },
 ]
 

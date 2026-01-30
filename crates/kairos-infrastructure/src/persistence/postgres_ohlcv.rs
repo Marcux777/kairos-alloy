@@ -3,6 +3,35 @@ use kairos_domain::services::ohlcv::DataQualityReport;
 use kairos_domain::value_objects::bar::Bar;
 use postgres::{Client, NoTls};
 
+#[derive(Debug, Clone)]
+pub struct PostgresMarketDataRepository {
+    pub db_url: String,
+    pub ohlcv_table: String,
+}
+
+impl PostgresMarketDataRepository {
+    pub fn new(db_url: String, ohlcv_table: String) -> Self {
+        Self { db_url, ohlcv_table }
+    }
+}
+
+impl kairos_domain::repositories::market_data::MarketDataRepository for PostgresMarketDataRepository {
+    fn load_ohlcv(
+        &self,
+        query: &kairos_domain::repositories::market_data::OhlcvQuery,
+    ) -> Result<(Vec<Bar>, DataQualityReport), String> {
+        load_postgres(
+            &self.db_url,
+            &self.ohlcv_table,
+            &query.exchange,
+            &query.market,
+            &query.symbol,
+            &query.timeframe,
+            query.expected_step_seconds,
+        )
+    }
+}
+
 pub fn load_postgres(
     db_url: &str,
     table: &str,
@@ -127,4 +156,3 @@ mod tests {
         assert!(validate_table_name("ohlcv;drop").is_err());
     }
 }
-

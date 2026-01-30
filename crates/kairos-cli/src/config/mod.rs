@@ -95,7 +95,7 @@ pub struct ExecutionConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FeaturesConfig {
-    pub return_mode: kairos_core::features::ReturnMode,
+    pub return_mode: kairos_domain::services::features::ReturnMode,
     pub sma_windows: Vec<u64>,
     pub volatility_windows: Option<Vec<u64>>,
     pub rsi_enabled: bool,
@@ -110,7 +110,7 @@ pub struct AgentConfig {
     pub url: String,
     pub timeout_ms: u64,
     pub retries: u32,
-    pub fallback_action: kairos_core::types::ActionType,
+    pub fallback_action: kairos_domain::value_objects::action_type::ActionType,
     pub api_version: String,
     pub feature_version: String,
 }
