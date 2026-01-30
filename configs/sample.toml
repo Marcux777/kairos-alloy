@@ -29,6 +29,21 @@ max_exposure_pct = 1.00
 # "qty" | "pct_equity"
 size_mode = "qty"
 
+[execution]
+# "simple" | "complete"
+model = "complete"
+latency_bars = 1
+buy_kind = "market"
+sell_kind = "market"
+price_reference = "close"
+limit_offset_bps = 10.0
+stop_offset_bps = 10.0
+spread_bps = 0.0
+max_fill_pct_of_volume = 0.25
+# "gtc" | "ioc" | "fok"
+tif = "gtc"
+# expire_after_bars = 3
+
 [features]
 return_mode = "log"
 sma_windows = [10, 50]

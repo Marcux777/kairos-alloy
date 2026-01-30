@@ -10,6 +10,7 @@ pub struct Config {
     pub costs: CostsConfig,
     pub risk: RiskConfig,
     pub orders: Option<OrdersConfig>,
+    pub execution: Option<ExecutionConfig>,
     pub features: FeaturesConfig,
     pub agent: AgentConfig,
     pub strategy: Option<StrategyConfig>,
@@ -58,6 +59,21 @@ pub struct RiskConfig {
 #[derive(Debug, Deserialize)]
 pub struct OrdersConfig {
     pub size_mode: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExecutionConfig {
+    pub model: Option<String>,
+    pub latency_bars: Option<u64>,
+    pub buy_kind: Option<String>,
+    pub sell_kind: Option<String>,
+    pub price_reference: Option<String>,
+    pub limit_offset_bps: Option<f64>,
+    pub stop_offset_bps: Option<f64>,
+    pub spread_bps: Option<f64>,
+    pub max_fill_pct_of_volume: Option<f64>,
+    pub tif: Option<String>,
+    pub expire_after_bars: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]

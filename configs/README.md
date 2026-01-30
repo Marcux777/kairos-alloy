@@ -8,5 +8,6 @@ Place configuration templates and runtime defaults here.
 Notes:
 
 - `orders.size_mode`: `"qty"` (default) interprets action `size` as quantity; `"pct_equity"` interprets `size` as a fraction (0..=1) of equity (BUY) or position (SELL).
+- `execution.*`: modela a semântica de execução. Em `model="complete"`, o engine suporta `market|limit|stop`, latência determinística em barras, TIF (GTC/IOC/FOK) e cap de liquidez via `bar.volume`.
 - `features.sentiment_missing`: controls how missing/invalid sentiment values are handled: `"error"` (default), `"zero_fill"`, `"forward_fill"`, `"drop_row"`.
 - Default `db.url` in `sample.toml` uses `db:5432` (the `docker compose` service name). If running outside compose, use `localhost:5432`.

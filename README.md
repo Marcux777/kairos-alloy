@@ -7,6 +7,7 @@ Backtesting e execucao em Rust com agente DRL + sentimento em Python.
 Visao geral em `ARCHITECTURE.md`.
 
 Documentacao suplementar: `docs/README.md`.
+Semantica de execucao (simulacao): `docs/engine/execution.md`.
 
 ## Workspace Rust
 
@@ -143,7 +144,9 @@ docker compose build dev
 Se você já rodou o repo com container como root, podem existir cópias `*.root-owned/` (ex.: `target.root-owned/`). Elas são ignoradas pelo git, mas podem ser removidas do filesystem:
 
 ```bash
-sudo rm -rf .github.root-owned .serena.root-owned configs.root-owned crates.root-owned docs.root-owned migrations.root-owned scripts.root-owned tests.root-owned tools.root-owned target.root-owned
+sudo rm -rf \
+  .configs.root-owned .crates.root-owned .docs.root-owned .github.root-owned .migrations.root-owned .scripts.root-owned .serena.root-owned .target.root-owned .tests.root-owned .tools.root-owned \
+  configs.root-owned crates.root-owned docs.root-owned migrations.root-owned scripts.root-owned target.root-owned tests.root-owned tools.root-owned
 ```
 
 Build da imagem:

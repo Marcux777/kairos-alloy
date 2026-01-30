@@ -232,7 +232,7 @@ fn run_bench(bars: usize, step_seconds: i64, mode: String, json: bool) -> Result
 
 fn run_validate(config_path: PathBuf, strict: bool, out: Option<PathBuf>) -> Result<(), String> {
     let config = load_config(&config_path)?;
-    print_config_summary("validate", &config, None);
+    print_config_summary("validate", &config, None)?;
 
     let expected_step = parse_duration_like(&config.run.timeframe)?;
     let timeframe_label = normalize_timeframe_label(&config.run.timeframe)?;
@@ -427,6 +427,7 @@ fn run_report(input: PathBuf) -> Result<(), String> {
         match load_config(config_path.as_path()) {
             Ok(config) => {
                 let meta = summary_meta_from_equity(&config, &equity);
+                let execution = resolve_execution_config(&config)?;
                 let snapshot = serde_json::json!({
                     "db": {
                         "exchange": config.db.exchange,
@@ -436,6 +437,25 @@ fn run_report(input: PathBuf) -> Result<(), String> {
                     "costs": {
                         "fee_bps": config.costs.fee_bps,
                         "slippage_bps": config.costs.slippage_bps,
+                    },
+                    "execution": {
+                        "model": match execution.model {
+                            kairos_core::engine::execution::ExecutionModel::Simple => "simple",
+                            kairos_core::engine::execution::ExecutionModel::Complete => "complete",
+                        },
+                        "latency_bars": execution.latency_bars,
+                        "buy_kind": format!("{:?}", execution.buy_kind).to_lowercase(),
+                        "sell_kind": format!("{:?}", execution.sell_kind).to_lowercase(),
+                        "price_reference": match execution.price_reference {
+                            kairos_core::engine::execution::PriceReference::Close => "close",
+                            kairos_core::engine::execution::PriceReference::Open => "open",
+                        },
+                        "limit_offset_bps": execution.limit_offset_bps,
+                        "stop_offset_bps": execution.stop_offset_bps,
+                        "spread_bps": execution.spread_bps,
+                        "max_fill_pct_of_volume": execution.max_fill_pct_of_volume,
+                        "tif": format!("{:?}", execution.tif).to_lowercase(),
+                        "expire_after_bars": execution.expire_after_bars,
                     },
                     "risk": {
                         "max_position_qty": config.risk.max_position_qty,
@@ -580,7 +600,11 @@ fn run_report(input: PathBuf) -> Result<(), String> {
     Ok(())
 }
 
-fn print_config_summary(command: &str, config: &Config, out: Option<&PathBuf>) {
+fn print_config_summary(
+    command: &str,
+    config: &Config,
+    out: Option<&PathBuf>,
+) -> Result<(), String> {
     println!(
         "{} cli: {} (run_id={}, symbol={}, timeframe={}, initial_capital={})",
         engine_name(),
@@ -624,6 +648,22 @@ fn print_config_summary(command: &str, config: &Config, out: Option<&PathBuf>) {
             .and_then(|orders| orders.size_mode.as_deref())
             .unwrap_or("qty")
     );
+
+    let exec = resolve_execution_config(config)?;
+    println!(
+        "execution: model={} latency_bars={} buy_kind={} sell_kind={} tif={} max_fill_pct_of_volume={} spread_bps={} slippage_bps={}",
+        match exec.model {
+            kairos_core::engine::execution::ExecutionModel::Simple => "simple",
+            kairos_core::engine::execution::ExecutionModel::Complete => "complete",
+        },
+        exec.latency_bars,
+        format!("{:?}", exec.buy_kind).to_lowercase(),
+        format!("{:?}", exec.sell_kind).to_lowercase(),
+        format!("{:?}", exec.tif).to_lowercase(),
+        exec.max_fill_pct_of_volume,
+        exec.spread_bps,
+        exec.slippage_bps
+    );
     println!(
         "features: return_mode={}, sma_windows={:?}, rsi_enabled={}, sentiment_lag={}, sentiment_missing={}",
         config.features.return_mode,
@@ -648,11 +688,13 @@ fn print_config_summary(command: &str, config: &Config, out: Option<&PathBuf>) {
     if let Some(out_dir) = out {
         println!("output dir: {}", out_dir.display());
     }
+
+    Ok(())
 }
 
 fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
     let config = load_config(&config_path)?;
-    print_config_summary("backtest", &config, out.as_ref());
+    print_config_summary("backtest", &config, out.as_ref())?;
 
     let mut audit_extras: Vec<AuditEvent> = Vec::new();
     let overall_start = Instant::now();
@@ -876,10 +918,11 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
     };
 
     let metrics_config = build_metrics_config(&config);
+    let execution = resolve_execution_config(&config)?;
 
     let data = VecBarSource::new(bars);
     let stage_start = Instant::now();
-    let mut runner = BacktestRunner::new(
+    let mut runner = BacktestRunner::new_with_execution(
         config.run.run_id.clone(),
         strategy,
         data,
@@ -887,9 +930,9 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
         config.run.initial_capital,
         metrics_config,
         config.costs.fee_bps,
-        config.costs.slippage_bps,
         config.run.symbol.clone(),
         size_mode,
+        execution,
     );
     let results = runner.run();
     audit_extras.push(timing_event(
@@ -926,6 +969,7 @@ fn write_outputs(
     write_trades_csv(run_dir.join("trades.csv").as_path(), &results.trades)?;
     write_equity_csv(run_dir.join("equity.csv").as_path(), &results.equity)?;
     let meta = summary_meta_from_equity(config, &results.equity);
+    let execution = resolve_execution_config(config)?;
     let config_snapshot = serde_json::json!({
         "db": {
             "exchange": config.db.exchange.clone(),
@@ -935,6 +979,25 @@ fn write_outputs(
         "costs": {
             "fee_bps": config.costs.fee_bps,
             "slippage_bps": config.costs.slippage_bps,
+        },
+        "execution": {
+            "model": match execution.model {
+                kairos_core::engine::execution::ExecutionModel::Simple => "simple",
+                kairos_core::engine::execution::ExecutionModel::Complete => "complete",
+            },
+            "latency_bars": execution.latency_bars,
+            "buy_kind": format!("{:?}", execution.buy_kind).to_lowercase(),
+            "sell_kind": format!("{:?}", execution.sell_kind).to_lowercase(),
+            "price_reference": match execution.price_reference {
+                kairos_core::engine::execution::PriceReference::Close => "close",
+                kairos_core::engine::execution::PriceReference::Open => "open",
+            },
+            "limit_offset_bps": execution.limit_offset_bps,
+            "stop_offset_bps": execution.stop_offset_bps,
+            "spread_bps": execution.spread_bps,
+            "max_fill_pct_of_volume": execution.max_fill_pct_of_volume,
+            "tif": format!("{:?}", execution.tif).to_lowercase(),
+            "expire_after_bars": execution.expire_after_bars,
         },
         "risk": {
             "max_position_qty": config.risk.max_position_qty,
@@ -1123,7 +1186,7 @@ fn parse_action_type(value: &str) -> Result<ActionType, String> {
 
 fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
     let config = load_config(&config_path)?;
-    print_config_summary("paper", &config, out.as_ref());
+    print_config_summary("paper", &config, out.as_ref())?;
 
     let mut audit_extras: Vec<AuditEvent> = Vec::new();
     let overall_start = Instant::now();
@@ -1339,6 +1402,7 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
     };
 
     let metrics_config = build_metrics_config(&config);
+    let execution = resolve_execution_config(&config)?;
 
     let risk_limits = RiskLimits {
         max_position_qty: config.risk.max_position_qty,
@@ -1356,7 +1420,7 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
         .unwrap_or(60);
     let data = RealtimeBarSource::new(bars, timeframe_seconds, replay_scale);
     let stage_start = Instant::now();
-    let mut runner = BacktestRunner::new(
+    let mut runner = BacktestRunner::new_with_execution(
         config.run.run_id.clone(),
         strategy,
         data,
@@ -1364,9 +1428,9 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
         config.run.initial_capital,
         metrics_config,
         config.costs.fee_bps,
-        config.costs.slippage_bps,
         config.run.symbol.clone(),
         size_mode,
+        execution,
     );
     let results = runner.run();
     audit_extras.push(timing_event(
@@ -1400,6 +1464,114 @@ fn resolve_size_mode(config: &Config) -> kairos_core::backtest::OrderSizeMode {
         }
         _ => kairos_core::backtest::OrderSizeMode::Quantity,
     }
+}
+
+fn resolve_execution_config(
+    config: &Config,
+) -> Result<kairos_core::engine::execution::ExecutionConfig, String> {
+    use kairos_core::engine::execution as core_exec;
+
+    let slippage_bps = config.costs.slippage_bps;
+    if !slippage_bps.is_finite() || slippage_bps < 0.0 {
+        return Err("costs.slippage_bps must be finite and >= 0".to_string());
+    }
+
+    let Some(exec) = config.execution.as_ref() else {
+        return Ok(core_exec::ExecutionConfig::simple(slippage_bps));
+    };
+
+    let model = exec
+        .model
+        .as_deref()
+        .unwrap_or("simple")
+        .trim()
+        .to_lowercase();
+
+    let mut cfg = match model.as_str() {
+        "simple" => core_exec::ExecutionConfig::simple(slippage_bps),
+        "complete" => core_exec::ExecutionConfig::complete_defaults(slippage_bps),
+        _ => return Err("execution.model must be: simple | complete".to_string()),
+    };
+
+    cfg.model = match model.as_str() {
+        "simple" => core_exec::ExecutionModel::Simple,
+        "complete" => core_exec::ExecutionModel::Complete,
+        _ => cfg.model,
+    };
+
+    if let Some(latency_bars) = exec.latency_bars {
+        cfg.latency_bars = latency_bars.max(1);
+    }
+
+    if let Some(value) = exec.buy_kind.as_deref() {
+        cfg.buy_kind = match value.trim().to_lowercase().as_str() {
+            "market" => core_exec::OrderKind::Market,
+            "limit" => core_exec::OrderKind::Limit,
+            "stop" => core_exec::OrderKind::Stop,
+            _ => return Err("execution.buy_kind must be: market | limit | stop".to_string()),
+        };
+    }
+
+    if let Some(value) = exec.sell_kind.as_deref() {
+        cfg.sell_kind = match value.trim().to_lowercase().as_str() {
+            "market" => core_exec::OrderKind::Market,
+            "limit" => core_exec::OrderKind::Limit,
+            "stop" => core_exec::OrderKind::Stop,
+            _ => return Err("execution.sell_kind must be: market | limit | stop".to_string()),
+        };
+    }
+
+    if let Some(value) = exec.price_reference.as_deref() {
+        cfg.price_reference = match value.trim().to_lowercase().as_str() {
+            "close" => core_exec::PriceReference::Close,
+            "open" => core_exec::PriceReference::Open,
+            _ => return Err("execution.price_reference must be: close | open".to_string()),
+        };
+    }
+
+    if let Some(limit_offset_bps) = exec.limit_offset_bps {
+        if !limit_offset_bps.is_finite() || limit_offset_bps < 0.0 {
+            return Err("execution.limit_offset_bps must be finite and >= 0".to_string());
+        }
+        cfg.limit_offset_bps = limit_offset_bps;
+    }
+
+    if let Some(stop_offset_bps) = exec.stop_offset_bps {
+        if !stop_offset_bps.is_finite() || stop_offset_bps < 0.0 {
+            return Err("execution.stop_offset_bps must be finite and >= 0".to_string());
+        }
+        cfg.stop_offset_bps = stop_offset_bps;
+    }
+
+    if let Some(spread_bps) = exec.spread_bps {
+        if !spread_bps.is_finite() || spread_bps < 0.0 {
+            return Err("execution.spread_bps must be finite and >= 0".to_string());
+        }
+        cfg.spread_bps = spread_bps;
+    }
+
+    if let Some(max_fill) = exec.max_fill_pct_of_volume {
+        if !(max_fill.is_finite() && 0.0 < max_fill && max_fill <= 1.0) {
+            return Err("execution.max_fill_pct_of_volume must be in (0, 1]".to_string());
+        }
+        cfg.max_fill_pct_of_volume = max_fill;
+    }
+
+    if let Some(value) = exec.tif.as_deref() {
+        cfg.tif = match value.trim().to_lowercase().as_str() {
+            "gtc" => core_exec::TimeInForce::Gtc,
+            "ioc" => core_exec::TimeInForce::Ioc,
+            "fok" => core_exec::TimeInForce::Fok,
+            _ => return Err("execution.tif must be: gtc | ioc | fok".to_string()),
+        };
+    }
+
+    if let Some(expire_after_bars) = exec.expire_after_bars {
+        cfg.expire_after_bars = Some(expire_after_bars.max(1));
+    }
+
+    cfg.slippage_bps = slippage_bps;
+    Ok(cfg)
 }
 
 fn resolve_sentiment_missing_policy(config: &Config) -> sentiment::MissingValuePolicy {
