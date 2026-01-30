@@ -23,8 +23,16 @@ venv/
 !.env.example
 
 # Local permission-fix backups (generated when dev container runs as root)
+.configs.root-owned/
+.crates.root-owned/
+.docs.root-owned/
 .github.root-owned/
+.migrations.root-owned/
+.scripts.root-owned/
 .serena.root-owned/
+.target.root-owned/
+.tests.root-owned/
+.tools.root-owned/
 configs.root-owned/
 crates.root-owned/
 docs.root-owned/
