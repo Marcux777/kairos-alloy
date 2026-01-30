@@ -882,14 +882,21 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
     let strategy = match config.agent.mode.as_str() {
         "remote" => {
             let fallback_action = parse_action_type(&config.agent.fallback_action)?;
+            let agent_url = config.agent.url.clone();
             let agent = AgentClient::new(
-                config.agent.url.clone(),
+                agent_url.clone(),
                 config.agent.timeout_ms,
                 config.agent.api_version.clone(),
                 config.agent.feature_version.clone(),
                 config.agent.retries,
                 fallback_action,
-            );
+            )
+            .map_err(|err| {
+                format!(
+                    "failed to init remote agent client (url={}): {err}",
+                    agent_url
+                )
+            })?;
             StrategyKind::Agent(AgentStrategy::new(
                 config.run.run_id.clone(),
                 config.run.symbol.clone(),
@@ -1366,14 +1373,21 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
     let strategy = match config.agent.mode.as_str() {
         "remote" => {
             let fallback_action = parse_action_type(&config.agent.fallback_action)?;
+            let agent_url = config.agent.url.clone();
             let agent = AgentClient::new(
-                config.agent.url.clone(),
+                agent_url.clone(),
                 config.agent.timeout_ms,
                 config.agent.api_version.clone(),
                 config.agent.feature_version.clone(),
                 config.agent.retries,
                 fallback_action,
-            );
+            )
+            .map_err(|err| {
+                format!(
+                    "failed to init remote agent client (url={}): {err}",
+                    agent_url
+                )
+            })?;
             StrategyKind::Agent(AgentStrategy::new(
                 config.run.run_id.clone(),
                 config.run.symbol.clone(),

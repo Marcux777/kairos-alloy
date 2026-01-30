@@ -66,13 +66,13 @@ impl AgentClient {
         feature_version: String,
         retries: u32,
         fallback_action: ActionType,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let client = Client::builder()
             .timeout(Duration::from_millis(timeout_ms))
             .pool_idle_timeout(Duration::from_secs(90))
             .build()
-            .expect("failed to build http client");
-        Self {
+            .map_err(|err| format!("failed to build http client: {err}"))?;
+        Ok(Self {
             url,
             timeout_ms,
             api_version,
@@ -80,7 +80,7 @@ impl AgentClient {
             retries,
             fallback_action,
             client,
-        }
+        })
     }
 
     pub fn act(&self, request: &ActionRequest) -> Result<ActionResponse, String> {
@@ -229,7 +229,8 @@ mod tests {
             "v1".to_string(),
             0,
             ActionType::Hold,
-        );
+        )
+        .expect("agent client");
         let response = client.fallback_response();
         assert_eq!(response.action_type, "HOLD");
     }
