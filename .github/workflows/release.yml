@@ -139,13 +139,13 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-import hashlib, os, pathlib
-archive = pathlib.Path(os.environ["ARCHIVE"])
-h = hashlib.sha256(archive.read_bytes()).hexdigest()
-out = archive.with_suffix(archive.suffix + ".sha256")
-out.write_text(f"{h}  {archive.name}\n", encoding="utf-8")
-print(out.name)
-PY
+          import hashlib, os, pathlib
+          archive = pathlib.Path(os.environ["ARCHIVE"])
+          h = hashlib.sha256(archive.read_bytes()).hexdigest()
+          out = archive.with_suffix(archive.suffix + ".sha256")
+          out.write_text(f"{h}  {archive.name}\n", encoding="utf-8")
+          print(out.name)
+          PY
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -176,27 +176,27 @@ PY
           set -euo pipefail
           export VERSION="${GITHUB_REF_NAME#v}"
           python - <<'PY'
-import os, re, pathlib
-version = os.environ["VERSION"]
-changelog = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          import os, re, pathlib
+          version = os.environ["VERSION"]
+          changelog = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
 
-pattern = re.compile(rf"^## \\[{re.escape(version)}\\] - .*$", re.M)
-m = pattern.search(changelog)
-if not m:
-    pathlib.Path("release-body.md").write_text(
-        f"Release v{version}\\n\\nSee CHANGELOG.md for details.\\n",
-        encoding="utf-8",
-    )
-    raise SystemExit(0)
+          pattern = re.compile(rf"^## \\[{re.escape(version)}\\] - .*$", re.M)
+          m = pattern.search(changelog)
+          if not m:
+              pathlib.Path("release-body.md").write_text(
+                  f"Release v{version}\\n\\nSee CHANGELOG.md for details.\\n",
+                  encoding="utf-8",
+              )
+              raise SystemExit(0)
 
-start = m.start()
-rest = changelog[m.end():]
-next_hdr = re.search(r"^## \\[", rest, flags=re.M)
-end = m.end() + (next_hdr.start() if next_hdr else len(rest))
-body = changelog[start:end].strip() + "\n"
-pathlib.Path("release-body.md").write_text(body, encoding="utf-8")
-print("release-body.md written")
-PY
+          start = m.start()
+          rest = changelog[m.end():]
+          next_hdr = re.search(r"^## \\[", rest, flags=re.M)
+          end = m.end() + (next_hdr.start() if next_hdr else len(rest))
+          body = changelog[start:end].strip() + "\n"
+          pathlib.Path("release-body.md").write_text(body, encoding="utf-8")
+          print("release-body.md written")
+          PY
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
