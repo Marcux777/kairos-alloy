@@ -10,6 +10,7 @@ Root-level docs remain the source of truth:
 
 ## Contents
 
+- `docs/architecture/`: architecture guides (current + target)
 - `docs/agent/`: agent HTTP/JSON contract (schemas + examples)
 - `docs/artifacts/`: run artifacts (schemas + headers)
 - `docs/engine/`: engine semantics (execution model)
