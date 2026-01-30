@@ -1,0 +1,39 @@
+name: Perf Bench
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  bench:
+    name: Synthetic bench (release)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Bench (engine)
+        shell: bash
+        run: cargo run -p kairos-cli --release -- bench --bars 500000 --step-seconds 60 --mode engine --json > target/bench_engine.json
+
+      - name: Bench (features)
+        shell: bash
+        run: cargo run -p kairos-cli --release -- bench --bars 500000 --step-seconds 60 --mode features --json > target/bench_features.json
+
+      - name: Upload bench artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-bench-${{ github.run_id }}
+          path: |
+            target/bench_engine.json
+            target/bench_features.json
+
