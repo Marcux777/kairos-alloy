@@ -141,7 +141,7 @@ pub fn load_config(path: &Path) -> Result<Config, String> {
 #[cfg(test)]
 mod tests {
     use super::{load_config, Config};
-    use std::path::Path;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn parse_config(toml_str: &str) -> Config {
         toml::from_str(toml_str).expect("config should parse")
@@ -206,8 +206,16 @@ replay_scale = 60
 
     #[test]
     fn load_config_missing_file_returns_error() {
-        let path = Path::new("/tmp/kairos-alloy-missing-config.toml");
-        let err = load_config(path).expect_err("expected load to fail");
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!(
+            "kairos-alloy-missing-config-{}_{}.toml",
+            std::process::id(),
+            now
+        ));
+        let err = load_config(path.as_path()).expect_err("expected load to fail");
         assert!(err.contains("failed to read config"));
     }
 }

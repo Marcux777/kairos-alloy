@@ -1683,6 +1683,15 @@ mod tests {
     };
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_tmp_dir(prefix: &str) -> PathBuf {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("kairos_{prefix}_{}_{}", std::process::id(), now))
+    }
 
     fn write_file(path: &Path, contents: &str) {
         if let Some(parent) = path.parent() {
@@ -1768,7 +1777,7 @@ feature_version = \"v1\"\n",
             return;
         }
         let db_url = std::env::var("KAIROS_DB_URL").expect("KAIROS_DB_URL must be set");
-        let tmp_dir = PathBuf::from("/tmp/kairos_cli_validate");
+        let tmp_dir = unique_tmp_dir("cli_validate");
         let config_path = sample_config(&tmp_dir, &db_url);
         run_validate(config_path, false, None).expect("validate");
     }
@@ -1779,7 +1788,7 @@ feature_version = \"v1\"\n",
             return;
         }
         let db_url = std::env::var("KAIROS_DB_URL").expect("KAIROS_DB_URL must be set");
-        let tmp_dir = PathBuf::from("/tmp/kairos_cli_backtest");
+        let tmp_dir = unique_tmp_dir("cli_backtest");
         let config_path = sample_config(&tmp_dir, &db_url);
         run_backtest(config_path.clone(), None).expect("backtest");
         let run_dir = tmp_dir.join("test_run");

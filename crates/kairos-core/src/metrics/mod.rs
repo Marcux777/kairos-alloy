@@ -95,12 +95,11 @@ impl MetricsState {
     }
 
     fn net_profit(&self) -> f64 {
-        if self.equity_curve.is_empty() {
+        let (Some(first), Some(last)) = (self.equity_curve.first(), self.equity_curve.last())
+        else {
             return 0.0;
-        }
-        let first = self.equity_curve.first().unwrap().equity;
-        let last = self.equity_curve.last().unwrap().equity;
-        last - first
+        };
+        last.equity - first.equity
     }
 
     fn sharpe_ratio(&self) -> f64 {

@@ -329,7 +329,10 @@ fn validate_table_name(table: &str) -> Result<(), String> {
             return Err(format!("invalid table name: {table}"));
         }
         let mut chars = part.chars();
-        let first = chars.next().unwrap();
+        let first = match chars.next() {
+            Some(ch) => ch,
+            None => return Err(format!("invalid table name: {table}")),
+        };
         if !(first.is_ascii_alphabetic() || first == '_') {
             return Err(format!("invalid table name: {table}"));
         }
@@ -359,18 +362,27 @@ fn parse_timestamp(value: &str) -> Result<i64, String> {
 mod tests {
     use super::{data_quality_from_bars, load_csv, resample_bars, validate_table_name};
     use std::fs;
-    use std::path::Path;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_tmp_path(name: &str) -> PathBuf {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("kairos_{name}_{}_{}", std::process::id(), now))
+    }
 
     #[test]
     fn load_csv_detects_duplicates_and_gaps() {
-        let tmp_path = Path::new("/tmp/kairos_ohlcv_test.csv");
+        let tmp_path = unique_tmp_path("ohlcv_test.csv");
         let csv_data = "timestamp_utc,open,high,low,close,volume\n\
 2026-01-01T00:00:00Z,1,1,1,1,1\n\
 2026-01-01T00:00:00Z,1,1,1,1,1\n\
 2026-01-01T00:00:02Z,1,1,1,1,1\n";
-        fs::write(tmp_path, csv_data).expect("write csv");
+        fs::write(&tmp_path, csv_data).expect("write csv");
 
-        let (bars, report) = load_csv(tmp_path).expect("load csv");
+        let (bars, report) = load_csv(&tmp_path).expect("load csv");
         assert_eq!(bars.len(), 2);
         assert_eq!(report.duplicates, 1);
         assert_eq!(report.gaps, 1);

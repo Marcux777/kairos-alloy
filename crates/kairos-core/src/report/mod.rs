@@ -282,12 +282,21 @@ mod tests {
     use crate::metrics::MetricsSummary;
     use crate::types::{EquityPoint, Side, Trade};
     use std::fs;
-    use std::path::Path;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_tmp_dir(prefix: &str) -> PathBuf {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!("kairos_{prefix}_{}_{}", std::process::id(), now))
+    }
 
     #[test]
     fn writes_report_files() {
-        let dir = Path::new("/tmp/kairos_report_test");
-        let _ = fs::create_dir_all(dir);
+        let dir = unique_tmp_dir("report_test");
+        let _ = fs::create_dir_all(&dir);
 
         let trades = vec![Trade {
             timestamp: 1,

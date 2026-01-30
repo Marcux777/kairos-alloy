@@ -8,5 +8,5 @@
   ],
   "forwardPorts": [5432],
   "shutdownAction": "stopCompose",
-  "remoteUser": "root"
+  "remoteUser": "kairos"
 }

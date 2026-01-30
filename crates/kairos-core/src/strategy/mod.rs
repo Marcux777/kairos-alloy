@@ -5,6 +5,7 @@ use crate::portfolio::Portfolio;
 use crate::report::AuditEvent;
 use crate::types::{Action, ActionType, Bar, Tick};
 use chrono::{DateTime, TimeZone, Utc};
+use chrono::{NaiveDate, NaiveDateTime};
 use serde_json::json;
 
 pub trait Strategy {
@@ -87,14 +88,10 @@ impl Strategy for SimpleSma {
             return Action::hold();
         }
 
-        let short = self.sma(self.short_window);
-        let long = self.sma(self.long_window);
-        if short.is_none() || long.is_none() {
+        let (Some(short), Some(long)) = (self.sma(self.short_window), self.sma(self.long_window))
+        else {
             return Action::hold();
-        }
-
-        let short = short.unwrap();
-        let long = long.unwrap();
+        };
 
         if short > long && portfolio.position_qty(&bar.symbol) <= 0.0 {
             return Action {
@@ -165,7 +162,12 @@ impl AgentStrategy {
     ) -> ActionRequest {
         let dt: DateTime<Utc> = match Utc.timestamp_opt(bar.timestamp, 0) {
             chrono::LocalResult::Single(dt) => dt,
-            _ => Utc.timestamp_opt(0, 0).unwrap(),
+            _ => {
+                let naive = NaiveDate::from_ymd_opt(1970, 1, 1)
+                    .and_then(|d| d.and_hms_opt(0, 0, 0))
+                    .unwrap_or(NaiveDateTime::MIN);
+                DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc)
+            }
         };
         ActionRequest {
             api_version: self.agent.api_version.clone(),
