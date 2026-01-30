@@ -1,0 +1,16 @@
+[package]
+name = "kairos-infrastructure"
+version = "0.1.0"
+edition = "2021"
+description = "Infrastructure adapters for Kairos Alloy (Postgres, filesystem, HTTP, reporting)."
+license = "LicenseRef-Proprietary"
+
+[dependencies]
+kairos-domain = { path = "../kairos-domain", version = "0.1.0" }
+chrono = { version = "0.4", features = ["serde"] }
+csv = "1"
+postgres = { version = "0.19", features = ["with-chrono-0_4"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+

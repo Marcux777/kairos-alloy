@@ -3,5 +3,8 @@ members = [
   "crates/kairos-core",
   "crates/kairos-cli",
   "crates/kairos-ingest",
+  "crates/kairos-domain",
+  "crates/kairos-application",
+  "crates/kairos-infrastructure",
 ]
 resolver = "2"

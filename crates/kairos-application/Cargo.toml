@@ -1,0 +1,10 @@
+[package]
+name = "kairos-application"
+version = "0.1.0"
+edition = "2021"
+description = "Application/use-case layer for Kairos Alloy."
+license = "LicenseRef-Proprietary"
+
+[dependencies]
+kairos-domain = { path = "../kairos-domain", version = "0.1.0" }
+
