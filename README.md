@@ -1,5 +1,9 @@
 # Kairos Alloy
 
+[![CI](https://github.com/Marcux777/kairos-alloy/actions/workflows/ci.yml/badge.svg)](https://github.com/Marcux777/kairos-alloy/actions/workflows/ci.yml)
+[![CI (Postgres)](https://github.com/Marcux777/kairos-alloy/actions/workflows/ci-postgres.yml/badge.svg)](https://github.com/Marcux777/kairos-alloy/actions/workflows/ci-postgres.yml)
+[![Coverage](https://github.com/Marcux777/kairos-alloy/actions/workflows/coverage.yml/badge.svg)](https://github.com/Marcux777/kairos-alloy/actions/workflows/coverage.yml)
+
 Backtesting e execucao em Rust com agente DRL + sentimento em Python.
 
 Links rapidos:
@@ -243,6 +247,24 @@ Para rodar `kairos-ingest`/`validate`/`backtest` com dados reais, você precisa 
 cargo test -p kairos-ingest
 ```
 
+## Testes E2E (PRD20 / Postgres)
+
+Os E2E PRD20 vivem em `crates/kairos-cli/tests/prd20_integration.rs` e ficam desabilitados por padrao.
+Para habilitar, exporte `KAIROS_DB_RUN_TESTS=1` e forneca `KAIROS_DB_URL`.
+
+Dentro do compose (subindo o Postgres local):
+
+```bash
+docker compose up -d db
+
+export KAIROS_DB_RUN_TESTS=1
+export KAIROS_DB_URL="postgres://kairos:$KAIROS_DB_PASSWORD@localhost:5432/$KAIROS_DB_NAME"
+
+cargo test -p kairos-cli --test prd20_integration --locked
+```
+
+No GitHub Actions, esses testes rodam no workflow `CI (Postgres)` em `.github/workflows/ci-postgres.yml`.
+
 ### Testes de integração (PRD §20)
 
 Os testes E2E que cobrem Postgres (migrate + ingest-kucoin mock + backtest/paper + sentimento CSV/JSON)
@@ -253,6 +275,14 @@ export KAIROS_DB_RUN_TESTS=1
 export KAIROS_DB_URL="postgres://kairos:$KAIROS_DB_PASSWORD@db:5432/$KAIROS_DB_NAME"
 cargo test --workspace
 ```
+
+## Cobertura (CI)
+
+O workflow `Coverage` (`.github/workflows/coverage.yml`) publica um relatorio HTML e um arquivo LCOV como artifact no GitHub Actions.
+
+## Performance/Stress (CI)
+
+O workflow `Perf Bench` (`.github/workflows/perf-bench.yml`) roda diariamente (scheduled) o `bench` em `--release` e publica `target/bench_engine.json` e `target/bench_features.json` como artifacts.
 
 ## Segurança (checks locais)
 
