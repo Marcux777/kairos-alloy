@@ -1,0 +1,43 @@
+name: CI (Postgres)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+
+jobs:
+  test_postgres:
+    name: Postgres Integration (nightly)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_DB: kairos
+          POSTGRES_USER: kairos
+          POSTGRES_PASSWORD: secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kairos -d kairos"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      KAIROS_DB_RUN_TESTS: "1"
+      KAIROS_DB_URL: "postgres://kairos:secret@localhost:5432/kairos"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Test (workspace)
+        shell: bash
+        run: cargo test --workspace --locked

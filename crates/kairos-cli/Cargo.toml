@@ -3,7 +3,7 @@ name = "kairos-cli"
 version = "0.1.0"
 edition = "2021"
 description = "CLI for Kairos Alloy."
-license = "UNLICENSED"
+license = "LicenseRef-Proprietary"
 autobins = false
 default-run = "kairos-alloy"
 
@@ -12,12 +12,12 @@ name = "kairos-alloy"
 path = "src/main.rs"
 
 [dependencies]
-kairos-core = { path = "../kairos-core" }
+kairos-core = { path = "../kairos-core", version = "0.1.0" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 serde_json = "1"
 
 [dev-dependencies]
-kairos-ingest = { path = "../kairos-ingest" }
+kairos-ingest = { path = "../kairos-ingest", version = "0.1.0" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

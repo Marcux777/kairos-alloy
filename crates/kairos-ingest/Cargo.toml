@@ -3,7 +3,7 @@ name = "kairos-ingest"
 version = "0.1.0"
 edition = "2021"
 description = "KuCoin OHLCV ingestion into PostgreSQL for Kairos Alloy."
-license = "UNLICENSED"
+license = "LicenseRef-Proprietary"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

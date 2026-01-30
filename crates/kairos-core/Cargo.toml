@@ -3,7 +3,7 @@ name = "kairos-core"
 version = "0.1.0"
 edition = "2021"
 description = "Core engine for Kairos Alloy."
-license = "UNLICENSED"
+license = "LicenseRef-Proprietary"
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }

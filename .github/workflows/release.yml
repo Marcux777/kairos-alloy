@@ -55,6 +55,15 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: Supply chain policy (cargo-deny)
+        shell: bash
+        run: cargo deny --locked check advisories bans licenses sources
+
       - name: Format (rustfmt)
         shell: bash
         run: cargo fmt --all -- --check

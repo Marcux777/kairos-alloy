@@ -1,0 +1,38 @@
+[advisories]
+# RustSec advisory database configuration. Lint levels are set via CLI flags.
+ignore = []
+
+[licenses]
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "LGPL-2.1-or-later",
+  "MIT",
+  "Unicode-3.0",
+  "Zlib",
+]
+confidence-threshold = 0.8
+exceptions = [
+  { crate = "kairos-core", allow = ["LicenseRef-Proprietary"] },
+  { crate = "kairos-cli", allow = ["LicenseRef-Proprietary"] },
+  { crate = "kairos-ingest", allow = ["LicenseRef-Proprietary"] },
+]
+
+[licenses.private]
+ignore = false
+registries = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
