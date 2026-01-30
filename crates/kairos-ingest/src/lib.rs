@@ -12,6 +12,7 @@ const KUCOIN_SPOT_BASE: &str = "https://api.kucoin.com";
 const KUCOIN_FUTURES_BASE: &str = "https://api-futures.kucoin.com";
 const KUCOIN_SPOT_LIMIT: i64 = 1500;
 const KUCOIN_FUTURES_LIMIT: i64 = 500;
+const MIGRATION_LOCK_ID: i64 = 891_507_011;
 
 #[derive(ValueEnum, Clone, Debug)]
 pub enum Market {
@@ -53,32 +54,47 @@ pub async fn migrate_db(db_url: &str, migrations_path: &Path) -> Result<(), Stri
         }
     });
 
-    if migrations_path.is_dir() {
+    acquire_migration_lock(&client).await?;
+    let result = if migrations_path.is_dir() {
         migrate_dir(&mut client, migrations_path).await?;
         println!("migrate complete: {}", migrations_path.display());
-        return Ok(());
-    }
-
-    if !migrations_path.is_file() {
-        return Err(format!(
+        Ok(())
+    } else if !migrations_path.is_file() {
+        Err(format!(
             "migrations path does not exist: {}",
             migrations_path.display()
-        ));
-    }
+        ))
+    } else {
+        let sql = std::fs::read_to_string(migrations_path).map_err(|err| {
+            format!(
+                "failed to read migrations file {}: {}",
+                migrations_path.display(),
+                err
+            )
+        })?;
+        client
+            .batch_execute(&sql)
+            .await
+            .map_err(|err| format!("failed to apply migrations: {err}"))?;
+        println!("migrate complete (legacy): {}", migrations_path.display());
+        Ok(())
+    };
+    release_migration_lock(&client).await;
+    result
+}
 
-    let sql = std::fs::read_to_string(migrations_path).map_err(|err| {
-        format!(
-            "failed to read migrations file {}: {}",
-            migrations_path.display(),
-            err
-        )
-    })?;
+async fn acquire_migration_lock(client: &PgClient) -> Result<(), String> {
     client
-        .batch_execute(&sql)
+        .execute("SELECT pg_advisory_lock($1)", &[&MIGRATION_LOCK_ID])
         .await
-        .map_err(|err| format!("failed to apply migrations: {err}"))?;
-    println!("migrate complete (legacy): {}", migrations_path.display());
+        .map_err(|err| format!("failed to acquire migration lock: {err}"))?;
     Ok(())
+}
+
+async fn release_migration_lock(client: &PgClient) {
+    let _ = client
+        .execute("SELECT pg_advisory_unlock($1)", &[&MIGRATION_LOCK_ID])
+        .await;
 }
 
 async fn migrate_dir(client: &mut PgClient, migrations_dir: &Path) -> Result<(), String> {

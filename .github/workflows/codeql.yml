@@ -53,8 +53,8 @@ jobs:
           fi
 
       - name: Analyze
+        if: steps.code_scanning.outputs.enabled == 'true'
         uses: github/codeql-action/analyze@v3
-        continue-on-error: ${{ steps.code_scanning.outputs.enabled != 'true' }}
 
       - name: Note about code scanning uploads
         if: always()
