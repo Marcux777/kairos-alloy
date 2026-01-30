@@ -1,0 +1,47 @@
+name: Coverage
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  coverage:
+    name: Rust coverage (cargo-llvm-cov)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+          components: llvm-tools-preview
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Coverage (HTML)
+        shell: bash
+        run: cargo llvm-cov --workspace --locked --all-targets --html
+
+      - name: Coverage (LCOV)
+        shell: bash
+        run: cargo llvm-cov --workspace --locked --all-targets --lcov --output-path target/coverage.lcov
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ github.sha }}
+          path: |
+            target/llvm-cov/html/
+            target/coverage.lcov
+
