@@ -1,0 +1,30 @@
+{
+  "api_version": "v1",
+  "feature_version": "v1",
+  "run_id": "btc_1m_2024q1",
+  "symbol": "BTCUSD",
+  "timeframe": "1m",
+  "items": [
+    {
+      "timestamp": "2024-01-01T00:00:00Z",
+      "observation": [0.0, 100.0],
+      "portfolio_state": {
+        "cash": 10000.0,
+        "position_qty": 0.0,
+        "position_avg_price": 0.0,
+        "equity": 10000.0
+      }
+    },
+    {
+      "timestamp": "2024-01-01T00:01:00Z",
+      "observation": [0.01, 101.0],
+      "portfolio_state": {
+        "cash": 9990.0,
+        "position_qty": 0.01,
+        "position_avg_price": 100.0,
+        "equity": 10001.0
+      }
+    }
+  ]
+}
+

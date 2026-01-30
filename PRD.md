@@ -716,7 +716,9 @@ timeframe = "1m"
 initial_capital = 10000.0
 
 [db]
-url = "postgres://kairos:secret@localhost:5432/kairos"
+# Recommended: omit db.url from versioned configs and provide it via env:
+# export KAIROS_DB_URL="postgres://kairos:<password>@localhost:5432/kairos"
+# url = "postgres://kairos:CHANGE_ME@localhost:5432/kairos"
 ohlcv_table = "ohlcv_candles"
 
 [paths]

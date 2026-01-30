@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kairos-alloy.local/schemas/agent/v1/request_batch.schema.json",
+  "title": "Kairos Alloy Agent ActionBatchRequest (v1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["api_version", "feature_version", "run_id", "symbol", "timeframe", "items"],
+  "properties": {
+    "api_version": { "type": "string", "minLength": 1 },
+    "feature_version": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "symbol": { "type": "string", "minLength": 1 },
+    "timeframe": { "type": "string", "minLength": 1 },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["timestamp", "observation", "portfolio_state"],
+        "properties": {
+          "timestamp": {
+            "type": "string",
+            "description": "UTC timestamp. RFC3339 recomendado.",
+            "minLength": 1
+          },
+          "observation": {
+            "type": "array",
+            "items": { "type": "number" }
+          },
+          "portfolio_state": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["cash", "position_qty", "position_avg_price", "equity"],
+            "properties": {
+              "cash": { "type": "number" },
+              "position_qty": { "type": "number" },
+              "position_avg_price": { "type": "number" },
+              "equity": { "type": "number" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+

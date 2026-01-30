@@ -1,5 +1,9 @@
 use crate::types::Bar;
 
+mod rolling;
+
+use rolling::{RollingRsi, RollingSma, RollingVar};
+
 #[derive(Debug, Clone)]
 pub struct Observation {
     pub values: Vec<f64>,
@@ -13,7 +17,8 @@ pub struct FeatureConfig {
     pub rsi_enabled: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ReturnMode {
     Log,
     Pct,
@@ -21,43 +26,71 @@ pub enum ReturnMode {
 
 pub struct FeatureBuilder {
     config: FeatureConfig,
-    prices: Vec<f64>,
+    prev_close: Option<f64>,
+    smas: Vec<RollingSma>,
+    vols: Vec<RollingVar>,
+    rsi: Option<RollingRsi>,
 }
 
 impl FeatureBuilder {
     pub fn new(config: FeatureConfig) -> Self {
+        let smas = config
+            .sma_windows
+            .iter()
+            .copied()
+            .map(RollingSma::new)
+            .collect();
+        let vols = config
+            .volatility_windows
+            .iter()
+            .copied()
+            .map(RollingVar::new)
+            .collect();
+        let rsi = config
+            .rsi_enabled
+            .then_some(RollingRsi::new(14, config.return_mode));
+
         Self {
             config,
-            prices: Vec::new(),
+            prev_close: None,
+            smas,
+            vols,
+            rsi,
         }
     }
 
     pub fn update(&mut self, bar: &Bar, sentiment: Option<&[f64]>) -> Observation {
-        let prev = self.prices.last().copied();
-        self.prices.push(bar.close);
-
         let mut values = Vec::new();
-        let ret = match prev {
-            Some(prev_price) if prev_price > 0.0 => match self.config.return_mode {
-                ReturnMode::Log => (bar.close / prev_price).ln(),
-                ReturnMode::Pct => bar.close / prev_price - 1.0,
-            },
-            _ => 0.0,
+        let prev_close = self.prev_close;
+        self.prev_close = Some(bar.close);
+
+        let (ret, has_prev) = match prev_close {
+            Some(prev_price) if prev_price > 0.0 => {
+                let r = match self.config.return_mode {
+                    ReturnMode::Log => (bar.close / prev_price).ln(),
+                    ReturnMode::Pct => bar.close / prev_price - 1.0,
+                };
+                (r, true)
+            }
+            _ => (0.0, false),
         };
         values.push(ret);
 
-        for window in &self.config.sma_windows {
-            let sma = self.sma(*window).unwrap_or(0.0);
+        for sma in &mut self.smas {
+            let sma = sma.update(bar.close).unwrap_or(0.0);
             values.push(sma);
         }
 
-        for window in &self.config.volatility_windows {
-            let vol = self.volatility(*window).unwrap_or(0.0);
-            values.push(vol);
+        if has_prev {
+            for vol in &mut self.vols {
+                values.push(vol.update(ret).unwrap_or(0.0));
+            }
+        } else {
+            values.extend(std::iter::repeat_n(0.0, self.vols.len()));
         }
 
-        if self.config.rsi_enabled {
-            values.push(self.rsi(14).unwrap_or(0.0));
+        if let Some(rsi) = &mut self.rsi {
+            values.push(rsi.update(bar.close).unwrap_or(0.0));
         }
 
         if let Some(sentiment_values) = sentiment {
@@ -65,70 +98,6 @@ impl FeatureBuilder {
         }
 
         Observation { values }
-    }
-
-    fn sma(&self, window: usize) -> Option<f64> {
-        if window == 0 || self.prices.len() < window {
-            return None;
-        }
-        let slice = &self.prices[self.prices.len() - window..];
-        Some(slice.iter().sum::<f64>() / window as f64)
-    }
-
-    fn rsi(&self, window: usize) -> Option<f64> {
-        if window == 0 || self.prices.len() <= window {
-            return None;
-        }
-        let slice = &self.prices[self.prices.len() - window - 1..];
-        let mut gains = 0.0;
-        let mut losses = 0.0;
-        for pair in slice.windows(2) {
-            let diff = pair[1] - pair[0];
-            if diff > 0.0 {
-                gains += diff;
-            } else {
-                losses -= diff;
-            }
-        }
-        if gains + losses == 0.0 {
-            return Some(50.0);
-        }
-        let rs = gains / losses.max(1e-9);
-        Some(100.0 - (100.0 / (1.0 + rs)))
-    }
-
-    fn volatility(&self, window: usize) -> Option<f64> {
-        if window == 0 || self.prices.len() <= window {
-            return None;
-        }
-        let slice = &self.prices[self.prices.len() - window - 1..];
-        let mut returns = Vec::with_capacity(window);
-        for pair in slice.windows(2) {
-            let prev = pair[0];
-            let curr = pair[1];
-            if prev <= 0.0 {
-                returns.push(0.0);
-                continue;
-            }
-            let r = match self.config.return_mode {
-                ReturnMode::Log => (curr / prev).ln(),
-                ReturnMode::Pct => curr / prev - 1.0,
-            };
-            returns.push(r);
-        }
-        if returns.is_empty() {
-            return None;
-        }
-        let mean = returns.iter().sum::<f64>() / returns.len() as f64;
-        let var = returns
-            .iter()
-            .map(|ret| {
-                let diff = ret - mean;
-                diff * diff
-            })
-            .sum::<f64>()
-            / returns.len() as f64;
-        Some(var.sqrt())
     }
 }
 

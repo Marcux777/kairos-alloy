@@ -7,7 +7,8 @@ initial_capital = 10000.0
 [db]
 # If running inside `docker compose run --rm dev`, keep host as `db`.
 # If running on your host machine, use `localhost` instead.
-url = "postgres://kairos:secret@db:5432/kairos"
+# You can either set this explicitly OR omit it and export KAIROS_DB_URL.
+# url = "postgres://kairos:CHANGE_ME@db:5432/kairos"
 ohlcv_table = "ohlcv_candles"
 exchange = "kucoin"
 market = "spot"

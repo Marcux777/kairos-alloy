@@ -1,4 +1,4 @@
-use crate::config::{load_config, Config};
+use crate::config::{load_config, AgentMode, Config};
 use kairos_core::backtest::{BacktestResults, BacktestRunner};
 use kairos_core::data::{ohlcv, sentiment};
 use kairos_core::market_data::{MarketDataSource, VecBarSource};
@@ -9,8 +9,9 @@ use kairos_core::report::{
 };
 use kairos_core::risk::RiskLimits;
 use kairos_core::strategy::{AgentStrategy, BuyAndHold, HoldStrategy, SimpleSma, StrategyKind};
-use kairos_core::types::{ActionType, EquityPoint};
+use kairos_core::types::EquityPoint;
 use kairos_core::{agents::AgentClient, engine_name, features};
+use std::env;
 use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -65,6 +66,14 @@ pub fn run(command: Command) -> Result<(), String> {
     }
 }
 
+fn resolve_db_url(config: &Config) -> Result<String, String> {
+    match config.db.url.as_deref() {
+        Some(url) if !url.trim().is_empty() => Ok(url.to_string()),
+        _ => env::var("KAIROS_DB_URL")
+            .map_err(|_| "missing db.url in config and env KAIROS_DB_URL is not set".to_string()),
+    }
+}
+
 fn run_validate(config_path: PathBuf, strict: bool, out: Option<PathBuf>) -> Result<(), String> {
     let config = load_config(&config_path)?;
     print_config_summary("validate", &config, None)?;
@@ -81,8 +90,9 @@ fn run_validate(config_path: PathBuf, strict: bool, out: Option<PathBuf>) -> Res
     let source_step = parse_duration_like(&source_timeframe_label)?;
     let exchange = config.db.exchange.to_lowercase();
     let market = config.db.market.to_lowercase();
+    let db_url = resolve_db_url(&config)?;
     let (source_bars, source_report) = ohlcv::load_postgres(
-        &config.db.url,
+        &db_url,
         &config.db.ohlcv_table,
         &exchange,
         &market,
@@ -451,7 +461,11 @@ fn print_config_summary(
     );
     println!(
         "data: db_url={}, table={}, exchange={}, market={}, source_timeframe={}, sentiment={}, out_dir={}",
-        config.db.url,
+        config
+            .db
+            .url
+            .as_deref()
+            .unwrap_or("$KAIROS_DB_URL"),
         config.db.ohlcv_table,
         config.db.exchange,
         config.db.market,
@@ -501,7 +515,10 @@ fn print_config_summary(
     );
     println!(
         "features: return_mode={}, sma_windows={:?}, rsi_enabled={}, sentiment_lag={}, sentiment_missing={}",
-        config.features.return_mode,
+        match config.features.return_mode {
+            features::ReturnMode::Log => "log",
+            features::ReturnMode::Pct => "pct",
+        },
         config.features.sma_windows,
         config.features.rsi_enabled,
         config.features.sentiment_lag,
@@ -512,11 +529,19 @@ fn print_config_summary(
     );
     println!(
         "agent: mode={}, url={}, timeout_ms={}, retries={}, fallback_action={}, api_version={}, feature_version={}",
-        config.agent.mode,
+        match config.agent.mode {
+            AgentMode::Remote => "remote",
+            AgentMode::Baseline => "baseline",
+            AgentMode::Hold => "hold",
+        },
         config.agent.url,
         config.agent.timeout_ms,
         config.agent.retries,
-        config.agent.fallback_action,
+        match config.agent.fallback_action {
+            kairos_core::types::ActionType::Buy => "BUY",
+            kairos_core::types::ActionType::Sell => "SELL",
+            kairos_core::types::ActionType::Hold => "HOLD",
+        },
         config.agent.api_version,
         config.agent.feature_version
     );
@@ -546,9 +571,10 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
     let source_step = parse_duration_like(&source_timeframe_label)?;
     let exchange = config.db.exchange.to_lowercase();
     let market = config.db.market.to_lowercase();
+    let db_url = resolve_db_url(&config)?;
     let stage_start = Instant::now();
     let (source_bars, source_report) = ohlcv::load_postgres(
-        &config.db.url,
+        &db_url,
         &config.db.ohlcv_table,
         &exchange,
         &market,
@@ -686,10 +712,7 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
     ));
 
     let feature_config = features::FeatureConfig {
-        return_mode: match config.features.return_mode.as_str() {
-            "log" => features::ReturnMode::Log,
-            _ => features::ReturnMode::Pct,
-        },
+        return_mode: config.features.return_mode,
         sma_windows: config
             .features
             .sma_windows
@@ -714,9 +737,9 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
 
     let size_mode = resolve_size_mode(&config);
 
-    let strategy = match config.agent.mode.as_str() {
-        "remote" => {
-            let fallback_action = parse_action_type(&config.agent.fallback_action)?;
+    let strategy = match config.agent.mode {
+        AgentMode::Remote => {
+            let fallback_action = config.agent.fallback_action;
             let agent_url = config.agent.url.clone();
             let agent = AgentClient::new(
                 agent_url.clone(),
@@ -742,7 +765,7 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
                 aligned_sentiment,
             ))
         }
-        "baseline" => {
+        AgentMode::Baseline => {
             let baseline = config
                 .strategy
                 .as_ref()
@@ -756,7 +779,7 @@ fn run_backtest(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String
                 _ => StrategyKind::BuyAndHold(BuyAndHold::new(1.0)),
             }
         }
-        _ => StrategyKind::Hold(HoldStrategy),
+        AgentMode::Hold => StrategyKind::Hold(HoldStrategy),
     };
 
     let metrics_config = build_metrics_config(&config);
@@ -858,7 +881,11 @@ fn write_outputs(
             "sentiment_missing": config.features.sentiment_missing.as_deref().unwrap_or("error"),
         },
         "agent": {
-            "mode": config.agent.mode.clone(),
+            "mode": match config.agent.mode {
+                AgentMode::Remote => "remote",
+                AgentMode::Baseline => "baseline",
+                AgentMode::Hold => "hold",
+            },
             "url": config.agent.url.clone(),
             "timeout_ms": config.agent.timeout_ms,
             "retries": config.agent.retries,
@@ -916,62 +943,11 @@ fn write_outputs(
 }
 
 fn parse_duration_like(value: &str) -> Result<i64, String> {
-    let trimmed = value.trim().to_lowercase();
-    if trimmed.is_empty() {
-        return Err("empty duration".to_string());
-    }
-    if let Ok(seconds) = trimmed.parse::<i64>() {
-        return Ok(seconds);
-    }
-
-    let (number_part, unit) = if let Some(stripped) = trimmed.strip_suffix("min") {
-        (stripped, "min")
-    } else if let Some(stripped) = trimmed.strip_suffix("hour") {
-        (stripped, "hour")
-    } else if let Some(stripped) = trimmed.strip_suffix("day") {
-        (stripped, "day")
-    } else if let Some(stripped) = trimmed.strip_suffix("week") {
-        (stripped, "week")
-    } else {
-        let (number_part, unit) = trimmed.split_at(trimmed.len() - 1);
-        (number_part, unit)
-    };
-
-    let multiplier = match unit {
-        "s" => 1,
-        "m" | "min" => 60,
-        "h" | "hour" => 3600,
-        "d" | "day" => 86400,
-        "w" | "week" => 604800,
-        _ => return Err(format!("unsupported duration unit: {unit}")),
-    };
-
-    let number: i64 = number_part
-        .parse()
-        .map_err(|_| format!("invalid duration: {value}"))?;
-    Ok(number * multiplier)
+    kairos_core::types::timeframe::parse_duration_like_seconds(value)
 }
 
 fn normalize_timeframe_label(value: &str) -> Result<String, String> {
-    let normalized = value.trim().to_lowercase();
-    let label = match normalized.as_str() {
-        "1m" | "1min" => "1min",
-        "3m" | "3min" => "3min",
-        "5m" | "5min" => "5min",
-        "15m" | "15min" => "15min",
-        "30m" | "30min" => "30min",
-        "1h" | "1hour" => "1hour",
-        "2h" | "2hour" => "2hour",
-        "4h" | "4hour" => "4hour",
-        "6h" | "6hour" => "6hour",
-        "8h" | "8hour" => "8hour",
-        "12h" | "12hour" => "12hour",
-        "1d" | "1day" => "1day",
-        "1w" | "1week" => "1week",
-        "1mo" | "1month" => "1month",
-        _ => return Err(format!("unsupported timeframe: {value}")),
-    };
-    Ok(label.to_string())
+    kairos_core::types::timeframe::Timeframe::parse(value).map(|tf| tf.label)
 }
 
 fn summary_meta_from_equity(config: &Config, equity: &[EquityPoint]) -> Option<SummaryMeta> {
@@ -1017,15 +993,6 @@ fn resolve_sma_windows(config: &Config) -> (usize, usize) {
     (10, 50)
 }
 
-fn parse_action_type(value: &str) -> Result<ActionType, String> {
-    match value.to_uppercase().as_str() {
-        "BUY" => Ok(ActionType::Buy),
-        "SELL" => Ok(ActionType::Sell),
-        "HOLD" => Ok(ActionType::Hold),
-        _ => Err(format!("unsupported action type: {}", value)),
-    }
-}
-
 fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
     let config = load_config(&config_path)?;
     print_config_summary("paper", &config, out.as_ref())?;
@@ -1045,9 +1012,10 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
     let source_step = parse_duration_like(&source_timeframe_label)?;
     let exchange = config.db.exchange.to_lowercase();
     let market = config.db.market.to_lowercase();
+    let db_url = resolve_db_url(&config)?;
     let stage_start = Instant::now();
     let (source_bars, source_report) = ohlcv::load_postgres(
-        &config.db.url,
+        &db_url,
         &config.db.ohlcv_table,
         &exchange,
         &market,
@@ -1185,10 +1153,7 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
     ));
 
     let feature_config = features::FeatureConfig {
-        return_mode: match config.features.return_mode.as_str() {
-            "log" => features::ReturnMode::Log,
-            _ => features::ReturnMode::Pct,
-        },
+        return_mode: config.features.return_mode,
         sma_windows: config
             .features
             .sma_windows
@@ -1205,9 +1170,9 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
     };
     let builder = features::FeatureBuilder::new(feature_config);
 
-    let strategy = match config.agent.mode.as_str() {
-        "remote" => {
-            let fallback_action = parse_action_type(&config.agent.fallback_action)?;
+    let strategy = match config.agent.mode {
+        AgentMode::Remote => {
+            let fallback_action = config.agent.fallback_action;
             let agent_url = config.agent.url.clone();
             let agent = AgentClient::new(
                 agent_url.clone(),
@@ -1233,7 +1198,7 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
                 aligned_sentiment,
             ))
         }
-        "baseline" => {
+        AgentMode::Baseline => {
             let baseline = config
                 .strategy
                 .as_ref()
@@ -1247,7 +1212,7 @@ fn run_paper(config_path: PathBuf, out: Option<PathBuf>) -> Result<(), String> {
                 _ => StrategyKind::BuyAndHold(BuyAndHold::new(1.0)),
             }
         }
-        _ => StrategyKind::Hold(HoldStrategy),
+        AgentMode::Hold => StrategyKind::Hold(HoldStrategy),
     };
 
     let metrics_config = build_metrics_config(&config);
@@ -1512,10 +1477,7 @@ impl MarketDataSource for RealtimeBarSource {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        normalize_timeframe_label, parse_action_type, parse_duration_like, run_backtest,
-        run_validate,
-    };
+    use super::{normalize_timeframe_label, parse_duration_like, run_backtest, run_validate};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1590,13 +1552,6 @@ feature_version = \"v1\"\n",
         assert_eq!(parse_duration_like("2m").unwrap(), 120);
         assert_eq!(parse_duration_like("1h").unwrap(), 3600);
         assert_eq!(parse_duration_like("1min").unwrap(), 60);
-    }
-
-    #[test]
-    fn parse_action_type_handles_values() {
-        assert_eq!(parse_action_type("buy").unwrap() as u8, 0);
-        assert_eq!(parse_action_type("sell").unwrap() as u8, 1);
-        assert_eq!(parse_action_type("hold").unwrap() as u8, 2);
     }
 
     #[test]

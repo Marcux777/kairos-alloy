@@ -14,6 +14,13 @@ pub struct PortfolioState {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct ActionBatchItem {
+    pub timestamp: String,
+    pub observation: Vec<f64>,
+    pub portfolio_state: PortfolioState,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ActionRequest {
     pub api_version: String,
     pub feature_version: String,
@@ -25,6 +32,16 @@ pub struct ActionRequest {
     pub portfolio_state: PortfolioState,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ActionBatchRequest {
+    pub api_version: String,
+    pub feature_version: String,
+    pub run_id: String,
+    pub symbol: String,
+    pub timeframe: String,
+    pub items: Vec<ActionBatchItem>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ActionResponse {
     pub action_type: String,
@@ -32,6 +49,11 @@ pub struct ActionResponse {
     pub confidence: Option<f64>,
     pub model_version: Option<String>,
     pub latency_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ActionBatchResponse {
+    pub items: Vec<ActionResponse>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -46,6 +68,12 @@ pub struct AgentCallInfo {
 pub struct AgentCallResult {
     pub info: AgentCallInfo,
     pub response: Option<ActionResponse>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentBatchCallResult {
+    pub info: AgentCallInfo,
+    pub responses: Option<Vec<ActionResponse>>,
 }
 
 pub struct AgentClient {
@@ -162,6 +190,154 @@ impl AgentClient {
                     .or_else(|| Some("agent request failed after retries".to_string())),
             },
             response: None,
+        }
+    }
+
+    pub fn act_batch(&self, requests: &[ActionRequest]) -> Result<Vec<ActionResponse>, String> {
+        let result = self.act_batch_detailed(requests);
+        match result.responses {
+            Some(responses) => Ok(responses),
+            None => Err(result
+                .info
+                .error
+                .unwrap_or_else(|| "agent batch request failed".to_string())),
+        }
+    }
+
+    pub fn act_batch_detailed(&self, requests: &[ActionRequest]) -> AgentBatchCallResult {
+        if requests.is_empty() {
+            return AgentBatchCallResult {
+                info: AgentCallInfo {
+                    attempts: 0,
+                    duration_ms: 0,
+                    status: None,
+                    error: None,
+                },
+                responses: Some(Vec::new()),
+            };
+        }
+
+        let endpoint = format!("{}/v1/act_batch", self.url.trim_end_matches('/'));
+        let start = Instant::now();
+        let mut attempts = 0u32;
+        let mut last_status: Option<u16> = None;
+        let mut last_error: Option<String> = None;
+
+        let first = &requests[0];
+        if requests.iter().any(|r| {
+            r.api_version != first.api_version
+                || r.feature_version != first.feature_version
+                || r.run_id != first.run_id
+                || r.symbol != first.symbol
+                || r.timeframe != first.timeframe
+        }) {
+            return AgentBatchCallResult {
+                info: AgentCallInfo {
+                    attempts: 0,
+                    duration_ms: 0,
+                    status: None,
+                    error: Some(
+                        "batch requests must share api_version/feature_version/run_id/symbol/timeframe"
+                            .to_string(),
+                    ),
+                },
+                responses: None,
+            };
+        }
+
+        let batch = ActionBatchRequest {
+            api_version: first.api_version.clone(),
+            feature_version: first.feature_version.clone(),
+            run_id: first.run_id.clone(),
+            symbol: first.symbol.clone(),
+            timeframe: first.timeframe.clone(),
+            items: requests
+                .iter()
+                .map(|r| ActionBatchItem {
+                    timestamp: r.timestamp.clone(),
+                    observation: r.observation.clone(),
+                    portfolio_state: PortfolioState {
+                        cash: r.portfolio_state.cash,
+                        position_qty: r.portfolio_state.position_qty,
+                        position_avg_price: r.portfolio_state.position_avg_price,
+                        equity: r.portfolio_state.equity,
+                    },
+                })
+                .collect(),
+        };
+
+        while attempts <= self.retries {
+            attempts += 1;
+            let response = self.client.post(&endpoint).json(&batch).send();
+            match response {
+                Ok(resp) => {
+                    last_status = Some(resp.status().as_u16());
+                    if resp.status() == StatusCode::OK {
+                        match resp.json::<ActionBatchResponse>() {
+                            Ok(parsed) => {
+                                if parsed.items.len() != requests.len() {
+                                    last_error = Some(format!(
+                                        "agent batch size mismatch: expected {} items, got {}",
+                                        requests.len(),
+                                        parsed.items.len()
+                                    ));
+                                    break;
+                                }
+                                for item in &parsed.items {
+                                    if let Err(err) = validate_action_response(item) {
+                                        last_error = Some(err);
+                                        break;
+                                    }
+                                }
+                                if last_error.is_none() {
+                                    return AgentBatchCallResult {
+                                        info: AgentCallInfo {
+                                            attempts,
+                                            duration_ms: start.elapsed().as_millis() as u64,
+                                            status: last_status,
+                                            error: None,
+                                        },
+                                        responses: Some(parsed.items),
+                                    };
+                                }
+                                break;
+                            }
+                            Err(err) => {
+                                last_error =
+                                    Some(format!("failed to parse agent batch response: {}", err));
+                                break;
+                            }
+                        }
+                    }
+
+                    if resp.status().is_server_error() && attempts <= self.retries {
+                        continue;
+                    }
+                    last_error = Some(format!(
+                        "agent http error: status {}",
+                        resp.status().as_u16()
+                    ));
+                    break;
+                }
+                Err(err) => {
+                    last_error = Some(format!("agent request failed: {}", err));
+                    if attempts <= self.retries {
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+
+        AgentBatchCallResult {
+            info: AgentCallInfo {
+                attempts,
+                duration_ms: start.elapsed().as_millis() as u64,
+                status: last_status,
+                error: last_error
+                    .or_else(|| Some("agent request failed after retries".to_string())),
+            },
+            responses: None,
         }
     }
 

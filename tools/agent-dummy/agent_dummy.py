@@ -29,7 +29,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404, "not found")
 
     def do_POST(self):  # noqa: N802
-        if self.path != "/v1/act":
+        if self.path not in ("/v1/act", "/v1/act_batch"):
             self.send_error(404, "not found")
             return
 
@@ -47,35 +47,52 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         mode = getattr(self.server, "mode", "hold")
-        action_type = "HOLD"
-        size = 0.0
-
-        if mode == "tiny_buy":
-            action_type = "BUY"
-            size = 0.0001
-        elif mode == "momentum":
-            obs = request.get("observation", [])
-            if isinstance(obs, list) and len(obs) > 0:
-                try:
-                    x = float(obs[0])
-                except Exception:
-                    x = 0.0
-                if x > 0:
-                    action_type = "BUY"
-                    size = 0.0001
-                elif x < 0:
-                    action_type = "SELL"
-                    size = 1.0
-
         latency_ms = int((time.perf_counter() - start) * 1000.0)
-        response = {
-            "action_type": action_type,
-            "size": size,
-            "confidence": 1.0,
-            "model_version": "dummy-0.1",
-            "latency_ms": latency_ms,
-        }
-        _json_response(self, 200, response)
+
+        def act_single(obs):
+            action_type = "HOLD"
+            size = 0.0
+
+            if mode == "tiny_buy":
+                action_type = "BUY"
+                size = 0.0001
+            elif mode == "momentum":
+                if isinstance(obs, list) and len(obs) > 0:
+                    try:
+                        x = float(obs[0])
+                    except Exception:
+                        x = 0.0
+                    if x > 0:
+                        action_type = "BUY"
+                        size = 0.0001
+                    elif x < 0:
+                        action_type = "SELL"
+                        size = 1.0
+
+            return {
+                "action_type": action_type,
+                "size": size,
+                "confidence": 1.0,
+                "model_version": "dummy-0.1",
+                "latency_ms": latency_ms,
+            }
+
+        if self.path == "/v1/act_batch":
+            items = request.get("items", [])
+            if not isinstance(items, list):
+                _json_response(self, 400, {"error": "invalid_items"})
+                return
+            out_items = []
+            for item in items:
+                obs = {}
+                if isinstance(item, dict):
+                    obs = item.get("observation", [])
+                out_items.append(act_single(obs))
+            _json_response(self, 200, {"items": out_items})
+            return
+
+        obs = request.get("observation", [])
+        _json_response(self, 200, act_single(obs))
 
     def log_message(self, fmt, *args):  # noqa: N802
         # Keep stdout clean for quickstart usage.
@@ -106,4 +123,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -16,7 +16,7 @@ enum Commands {
     Migrate {
         #[arg(long)]
         db_url: String,
-        #[arg(long, default_value = "migrations/0001_create_ohlcv_candles.sql")]
+        #[arg(long, default_value = "migrations")]
         migrations_path: PathBuf,
     },
     /// Ingest KuCoin OHLCV into PostgreSQL.

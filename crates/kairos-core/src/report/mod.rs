@@ -33,40 +33,71 @@ pub fn write_audit_jsonl(path: &Path, events: &[AuditEvent]) -> Result<(), Strin
 }
 
 pub fn write_trades_csv(path: &Path, trades: &[Trade]) -> Result<(), String> {
-    let mut output =
-        String::from("timestamp_utc,symbol,side,qty,price,fee,slippage,strategy_id,reason\n");
+    let mut wtr = csv::Writer::from_path(path)
+        .map_err(|err| format!("failed to create trades csv {}: {}", path.display(), err))?;
+    wtr.write_record([
+        "timestamp_utc",
+        "symbol",
+        "side",
+        "qty",
+        "price",
+        "fee",
+        "slippage",
+        "strategy_id",
+        "reason",
+    ])
+    .map_err(|err| format!("failed to write trades csv header: {}", err))?;
+
     for trade in trades {
-        output.push_str(&format!(
-            "{},{},{:?},{},{},{},{},{},{}\n",
-            trade.timestamp,
-            trade.symbol,
-            trade.side,
-            trade.quantity,
-            trade.price,
-            trade.fee,
-            trade.slippage,
-            trade.strategy_id,
-            trade.reason
-        ));
+        let side = match trade.side {
+            Side::Buy => "BUY",
+            Side::Sell => "SELL",
+        };
+        wtr.write_record([
+            trade.timestamp.to_string(),
+            trade.symbol.clone(),
+            side.to_string(),
+            trade.quantity.to_string(),
+            trade.price.to_string(),
+            trade.fee.to_string(),
+            trade.slippage.to_string(),
+            trade.strategy_id.clone(),
+            trade.reason.clone(),
+        ])
+        .map_err(|err| format!("failed to write trades row: {}", err))?;
     }
-    fs::write(path, output).map_err(|err| format!("failed to write trades: {}", err))
+
+    wtr.flush()
+        .map_err(|err| format!("failed to flush trades csv: {}", err))
 }
 
 pub fn write_equity_csv(path: &Path, points: &[EquityPoint]) -> Result<(), String> {
-    let mut output =
-        String::from("timestamp_utc,equity,cash,position_qty,unrealized_pnl,realized_pnl\n");
+    let mut wtr = csv::Writer::from_path(path)
+        .map_err(|err| format!("failed to create equity csv {}: {}", path.display(), err))?;
+    wtr.write_record([
+        "timestamp_utc",
+        "equity",
+        "cash",
+        "position_qty",
+        "unrealized_pnl",
+        "realized_pnl",
+    ])
+    .map_err(|err| format!("failed to write equity csv header: {}", err))?;
+
     for point in points {
-        output.push_str(&format!(
-            "{},{},{},{},{},{}\n",
-            point.timestamp,
-            point.equity,
-            point.cash,
-            point.position_qty,
-            point.unrealized_pnl,
-            point.realized_pnl
-        ));
+        wtr.write_record([
+            point.timestamp.to_string(),
+            point.equity.to_string(),
+            point.cash.to_string(),
+            point.position_qty.to_string(),
+            point.unrealized_pnl.to_string(),
+            point.realized_pnl.to_string(),
+        ])
+        .map_err(|err| format!("failed to write equity row: {}", err))?;
     }
-    fs::write(path, output).map_err(|err| format!("failed to write equity: {}", err))
+
+    wtr.flush()
+        .map_err(|err| format!("failed to flush equity csv: {}", err))
 }
 
 #[derive(Debug, Serialize)]
@@ -278,7 +309,9 @@ pub fn write_logs_jsonl(
 
 #[cfg(test)]
 mod tests {
-    use super::{write_equity_csv, write_logs_jsonl, write_summary_json, write_trades_csv};
+    use super::{
+        read_trades_csv, write_equity_csv, write_logs_jsonl, write_summary_json, write_trades_csv,
+    };
     use crate::metrics::MetricsSummary;
     use crate::types::{EquityPoint, Side, Trade};
     use std::fs;
@@ -337,5 +370,32 @@ mod tests {
         assert!(dir.join("equity.csv").exists());
         assert!(dir.join("summary.json").exists());
         assert!(dir.join("logs.jsonl").exists());
+    }
+
+    #[test]
+    fn trades_csv_roundtrips_with_escaping() {
+        let dir = unique_tmp_dir("report_trades_roundtrip");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("trades.csv");
+
+        let trades = vec![Trade {
+            timestamp: 1704067200,
+            symbol: "BTCUSD".to_string(),
+            side: Side::Buy,
+            quantity: 1.0,
+            price: 100.0,
+            fee: 0.1,
+            slippage: 0.2,
+            strategy_id: "strat,a\"b".to_string(),
+            reason: "line1\nline2,comma".to_string(),
+        }];
+
+        write_trades_csv(path.as_path(), &trades).expect("write trades");
+        let parsed = read_trades_csv(path.as_path()).expect("read trades");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].strategy_id, trades[0].strategy_id);
+        assert_eq!(parsed[0].reason, trades[0].reason);
+        assert_eq!(parsed[0].symbol, trades[0].symbol);
+        assert_eq!(parsed[0].timestamp, trades[0].timestamp);
     }
 }
