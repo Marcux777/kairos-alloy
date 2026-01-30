@@ -59,6 +59,9 @@ impl Portfolio {
             Side::Buy => {
                 let cost = quantity * price + fee;
                 self.cash -= cost;
+                if self.cash < 0.0 && self.cash > -1e-9 {
+                    self.cash = 0.0;
+                }
 
                 match position {
                     Some(pos) => {

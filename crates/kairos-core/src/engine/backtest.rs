@@ -340,6 +340,20 @@ where
                         return;
                     }
                 };
+                // Cash account: if there is no cash available, treat this as insufficient funds (not exposure).
+                if self.portfolio.cash() <= 0.0 || !self.portfolio.cash().is_finite() {
+                    self.audit_events.push(order_reject_event(
+                        &self.run_id,
+                        bar.timestamp,
+                        &self.symbol,
+                        self.strategy.name(),
+                        "insufficient_cash",
+                        action.action_type,
+                        requested_size,
+                        self.size_mode,
+                    ));
+                    return;
+                }
                 if !self
                     .risk_limits
                     .allows_position(self.portfolio.position_qty(&bar.symbol), qty)
@@ -584,7 +598,7 @@ mod tests {
     use crate::metrics::MetricsConfig;
     use crate::risk::RiskLimits;
     use crate::strategy::Strategy;
-    use crate::types::Bar;
+    use crate::types::{Action, ActionType, Bar};
 
     struct DummyDataSource {
         bars: Vec<Bar>,
@@ -614,6 +628,34 @@ mod tests {
     impl Strategy for DummyStrategy {
         fn name(&self) -> &str {
             "dummy"
+        }
+    }
+
+    struct BuyOnceStrategy {
+        size: f64,
+        used: bool,
+    }
+
+    impl BuyOnceStrategy {
+        fn new(size: f64) -> Self {
+            Self { size, used: false }
+        }
+    }
+
+    impl Strategy for BuyOnceStrategy {
+        fn name(&self) -> &str {
+            "buy_once"
+        }
+
+        fn on_bar(&mut self, _bar: &Bar, _portfolio: &crate::portfolio::Portfolio) -> Action {
+            if self.used {
+                return Action::hold();
+            }
+            self.used = true;
+            Action {
+                action_type: ActionType::Buy,
+                size: self.size,
+            }
         }
     }
 
@@ -657,5 +699,103 @@ mod tests {
         let result = runner.run();
 
         assert_eq!(result.summary.bars_processed, 2);
+    }
+
+    #[test]
+    fn buy_qty_never_makes_cash_negative() {
+        let bars = vec![
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 1,
+                open: 10.0,
+                high: 10.0,
+                low: 10.0,
+                close: 10.0,
+                volume: 1.0,
+            },
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 2,
+                open: 10.0,
+                high: 10.0,
+                low: 10.0,
+                close: 10.0,
+                volume: 1.0,
+            },
+        ];
+
+        let data = DummyDataSource::new(bars);
+        let strategy = BuyOnceStrategy::new(10_000.0);
+        let mut runner = BacktestRunner::new(
+            "run_cash".to_string(),
+            strategy,
+            data,
+            RiskLimits::default(),
+            100.0,
+            MetricsConfig::default(),
+            0.0,
+            0.0,
+            "BTCUSD".to_string(),
+            OrderSizeMode::Quantity,
+        );
+        let result = runner.run();
+
+        assert!(!result.equity.is_empty());
+        assert!(result.equity.iter().all(|p| p.cash >= -1e-9));
+    }
+
+    #[test]
+    fn buy_qty_with_zero_cash_is_rejected() {
+        let bars = vec![
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 1,
+                open: 10.0,
+                high: 10.0,
+                low: 10.0,
+                close: 10.0,
+                volume: 1.0,
+            },
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 2,
+                open: 10.0,
+                high: 10.0,
+                low: 10.0,
+                close: 10.0,
+                volume: 1.0,
+            },
+        ];
+
+        let data = DummyDataSource::new(bars);
+        let strategy = BuyOnceStrategy::new(1.0);
+        let mut runner = BacktestRunner::new(
+            "run_zero_cash".to_string(),
+            strategy,
+            data,
+            RiskLimits::default(),
+            0.0,
+            MetricsConfig::default(),
+            0.0,
+            0.0,
+            "BTCUSD".to_string(),
+            OrderSizeMode::Quantity,
+        );
+        let result = runner.run();
+
+        assert!(result.trades.is_empty());
+        let has_insufficient_cash = result
+            .audit_events
+            .iter()
+            .any(|e| e.error.as_deref() == Some("insufficient_cash"));
+        if !has_insufficient_cash {
+            for e in &result.audit_events {
+                println!(
+                    "audit_event: stage={} action={} error={:?}",
+                    e.stage, e.action, e.error
+                );
+            }
+        }
+        assert!(has_insufficient_cash);
     }
 }
