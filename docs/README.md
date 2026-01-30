@@ -2,6 +2,8 @@
 
 Supplementary documentation that is not part of the root-level product scope docs.
 
+Onboarding / quick start lives in the repository root `README.md`.
+
 Root-level docs remain the source of truth:
 - `README.md`
 - `PRD.md`

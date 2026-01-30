@@ -2,43 +2,109 @@
 
 Backtesting e execucao em Rust com agente DRL + sentimento em Python.
 
-## Arquitetura
+Links rapidos:
+
+- Arquitetura (visao geral): `ARCHITECTURE.md`
+- Documentacao suplementar: `docs/README.md`
+- Semantica de execucao (simulacao): `docs/engine/execution.md`
+- Especificacao do MVP: `PRD.md`
+
+## Quickstart (10 minutos)
+
+Dentro do ambiente `dev` (Docker), em 2 terminais:
+
+### 1) Subir o Postgres
+
+```bash
+docker compose up -d db
+```
+
+O `db` deve ficar como `healthy` (veja via `docker compose ps`).
+
+### 2) Entrar no container dev
+
+```bash
+docker compose run --rm dev
+```
+
+### 3) Migrar + ingerir um recorte pequeno (recomendado)
+
+```bash
+cargo run -p kairos-ingest -- migrate --db-url "$KAIROS_DB_URL"
+cargo run -p kairos-ingest -- ingest-kucoin \
+  --db-url "$KAIROS_DB_URL" \
+  --symbol BTC-USDT \
+  --market spot \
+  --timeframe 1min \
+  --start 2024-01-01T00:00:00Z \
+  --end 2024-01-02T00:00:00Z
+```
+
+Esperado: o comando de ingestao termina sem erro e passa a existir OHLCV para o par/timeframe no DB.
+
+### 4) Rodar um agente dummy + backtest via agente
+
+```bash
+python3 tools/agent-dummy/agent_dummy.py --host 127.0.0.1 --port 8000 --mode tiny_buy &
+cargo run -p kairos-cli -- backtest --config configs/quickstart.toml --out runs/
+```
+
+### 5) Ver os artefatos gerados
+
+O run escreve em `runs/<run_id>/` (ex.: `runs/quickstart_btc_usdt_1min/`):
+
+- `trades.csv`
+- `equity.csv`
+- `summary.json`
+- `logs.jsonl`
+- `config_snapshot.toml`
+- `summary.html` (quando `report.html=true`)
+
+## CLI (MVP): comandos e exemplos
+
+```bash
+cargo run -p kairos-cli -- backtest --config configs/sample.toml --out runs/
+cargo run -p kairos-cli -- paper --config configs/sample.toml --out runs/
+cargo run -p kairos-cli -- validate --config configs/sample.toml
+cargo run -p kairos-cli -- report --input runs/<run_id>/
+cargo run -p kairos-cli -- --build-info
+```
+
+O que esperar:
+
+- `backtest`: cria `runs/<run_id>/` e escreve os artefatos listados acima.
+- `paper`: replay deterministico (sem esperar) quando `paper.replay_scale=0` no config.
+- `validate`: em modo strict, falha quando excede limites em `[data_quality]`.
+- `report`: regenera `summary.json`/`summary.html` a partir dos artefatos existentes (`trades.csv`, `equity.csv`, `config_snapshot.toml`).
+
+## Configuracao (`configs/*.toml`)
+
+Arquivos prontos:
+
+- `configs/quickstart.toml`: caminho mais curto para rodar (bom para onboarding).
+- `configs/sample.toml`: modelo completo (espelha o PRD MVP).
+- `configs/README.md`: notas sobre chaves e semantica (orders/execution/features).
+
+Checklist rapido do que editar:
+
+- `[run]`: `run_id`, `symbol`, `timeframe`, `initial_capital`
+- `[db]`: `url` (ou omita e use `KAIROS_DB_URL`), `exchange`, `market`, `ohlcv_table`
+- `[paths]`: `sentiment_path` (opcional), `out_dir`
+- `[execution]`: `model`, `tif`, `latency_bars`, `max_fill_pct_of_volume`
+- `[features]`: `return_mode`, `sma_windows`, `rsi_enabled`, `sentiment_lag`, `sentiment_missing`
+
+`features.sentiment_missing` aceita:
+
+- `error` (default)
+- `zero_fill`
+- `forward_fill`
+- `drop_row`
+
+## Arquitetura e docs
 
 Visao geral em `ARCHITECTURE.md`.
 
 Documentacao suplementar: `docs/README.md`.
-Semantica de execucao (simulacao): `docs/engine/execution.md`.
-
-## Workspace Rust
-
-Comandos locais (dentro do container):
-
-```bash
-cargo build
-cargo run -p kairos-cli
-```
-
-## Desenvolvimento sem Docker
-
-Se você não tiver Docker disponível (por exemplo WSL sem integração do Docker Desktop), você ainda consegue:
-
-```bash
-rustup toolchain install 1.93.0
-rustup default 1.93.0
-rustup component add rustfmt clippy
-cargo test --workspace --locked
-cargo clippy --workspace --all-targets -- -D warnings
-```
-
-Para rodar `kairos-ingest`/`validate`/`backtest` com dados reais, você precisa de um PostgreSQL acessível e `db.url` ajustado no `configs/*.toml`.
-
-## Segurança (checks locais)
-
-Para rodar os mesmos “gates” de supply-chain/segurança localmente (quando aplicável):
-
-```bash
-./scripts/security-check.sh
-```
 
 ## Instalacao via Releases
 
@@ -85,51 +151,6 @@ cargo run -p kairos-ingest -- ingest-kucoin \
   --start 2024-01-01T00:00:00Z \
   --end 2024-02-01T00:00:00Z
 ```
-
-## CLI (MVP)
-
-Exemplos:
-
-```bash
-cargo run -p kairos-cli -- backtest --config configs/sample.toml --out runs/
-cargo run -p kairos-cli -- paper --config configs/sample.toml --out runs/
-cargo run -p kairos-cli -- validate --config configs/sample.toml
-cargo run -p kairos-cli -- report --input runs/<run_id>/
-cargo run -p kairos-cli -- --build-info
-```
-
-Nota: o comando `report` regenera o sumario/HTML a partir dos artefatos do run (ex.: `trades.csv`, `equity.csv`, `config_snapshot.toml`) via `kairos-application::reporting` (o `kairos-cli` delega como composition root).
-
-## Quickstart (10 minutos)
-
-Em 2 terminais, dentro do ambiente `dev` (Docker):
-
-```bash
-docker compose up -d db
-docker compose run --rm dev
-```
-
-Terminal A (migrate + ingest pequeno):
-
-```bash
-cargo run -p kairos-ingest -- migrate --db-url "$KAIROS_DB_URL"
-cargo run -p kairos-ingest -- ingest-kucoin \
-  --db-url "$KAIROS_DB_URL" \
-  --symbol BTC-USDT \
-  --market spot \
-  --timeframe 1min \
-  --start 2024-01-01T00:00:00Z \
-  --end 2024-01-02T00:00:00Z
-```
-
-Terminal B (suba o agente dummy e rode o backtest via agente):
-
-```bash
-python3 tools/agent-dummy/agent_dummy.py --host 127.0.0.1 --port 8000 --mode tiny_buy &
-cargo run -p kairos-cli -- backtest --config configs/quickstart.toml --out runs/
-```
-
-Artefatos em `runs/quickstart_btc_usdt_1min/`.
 
 ## Ambiente de construção (Docker)
 
@@ -202,6 +223,20 @@ Se você estiver no Windows usando WSL, o `devcontainer.json` já monta o Codex 
 
 Se o seu distro/usuário for diferente, ajuste o mount em `.devcontainer/devcontainer.json`.
 
+## Desenvolvimento sem Docker
+
+Se você não tiver Docker disponível (por exemplo WSL sem integração do Docker Desktop), você ainda consegue:
+
+```bash
+rustup toolchain install 1.93.0
+rustup default 1.93.0
+rustup component add rustfmt clippy
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Para rodar `kairos-ingest`/`validate`/`backtest` com dados reais, você precisa de um PostgreSQL acessível e `db.url` ajustado no `configs/*.toml`.
+
 ## Testes
 
 ```bash
@@ -218,3 +253,17 @@ export KAIROS_DB_RUN_TESTS=1
 export KAIROS_DB_URL="postgres://kairos:$KAIROS_DB_PASSWORD@db:5432/$KAIROS_DB_NAME"
 cargo test --workspace
 ```
+
+## Segurança (checks locais)
+
+Para rodar os mesmos “gates” de supply-chain/segurança localmente (quando aplicável):
+
+```bash
+./scripts/security-check.sh
+```
+
+## Troubleshooting
+
+- Postgres nao conecta: confirme `KAIROS_DB_URL` e se o host deve ser `db:5432` (dentro do compose) ou `localhost:5432` (fora).
+- `agent.mode=remote` falha: garanta que o agente esteja rodando em `agent.url` e acessivel do ambiente onde o CLI roda.
+- Arquivos `*.root-owned`: use `KAIROS_UID`/`KAIROS_GID` e/ou a limpeza descrita na secao UID/GID.
