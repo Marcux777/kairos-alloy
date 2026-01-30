@@ -35,3 +35,11 @@ jobs:
 
       - name: Analyze
         uses: github/codeql-action/analyze@v3
+        continue-on-error: true
+
+      - name: Note about code scanning uploads
+        if: always()
+        shell: bash
+        run: |
+          echo "If CodeQL upload fails with: 'Code scanning is not enabled for this repository', enable it in:"
+          echo "Settings -> Code security and analysis -> Code scanning"
