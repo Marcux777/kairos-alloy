@@ -200,6 +200,163 @@ pub fn write_summary_html(
         .map_err(|err| format!("failed to write html: {}", err))
 }
 
+pub fn write_dashboard_html(
+    path: &Path,
+    summary: &MetricsSummary,
+    meta: Option<&SummaryMeta>,
+    trades: &[Trade],
+    equity: &[EquityPoint],
+) -> Result<(), String> {
+    let (run_id, symbol, timeframe, start, end) = match meta {
+        Some(meta) => (
+            meta.run_id.as_str(),
+            meta.symbol.as_str(),
+            meta.timeframe.as_str(),
+            meta.start.to_string(),
+            meta.end.to_string(),
+        ),
+        None => (
+            "unknown",
+            "unknown",
+            "unknown",
+            "unknown".to_string(),
+            "unknown".to_string(),
+        ),
+    };
+
+    let equity_json = serde_json::to_string(equity)
+        .map_err(|err| format!("failed to serialize equity: {err}"))?;
+    let trades_json = serde_json::to_string(trades)
+        .map_err(|err| format!("failed to serialize trades: {err}"))?;
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Kairos Alloy Dashboard</title>
+  <style>
+    body {{ font-family: ui-sans-serif, system-ui; padding: 24px; }}
+    code {{ background: #f2f2f2; padding: 2px 6px; border-radius: 4px; }}
+    .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }}
+    .card {{ border: 1px solid #ddd; border-radius: 10px; padding: 16px; background: #fff; }}
+    canvas {{ width: 100%; height: 260px; border: 1px solid #eee; border-radius: 8px; }}
+    table {{ border-collapse: collapse; width: 100%; }}
+    th, td {{ border: 1px solid #eee; padding: 8px; font-size: 12px; }}
+    th {{ background: #fafafa; text-align: left; }}
+    .muted {{ color: #666; }}
+  </style>
+</head>
+<body>
+  <h1>Kairos Alloy Dashboard</h1>
+  <p class="muted">
+    run_id: <code>{run_id}</code> · symbol: <code>{symbol}</code> · timeframe: <code>{timeframe}</code>
+    · start: <code>{start}</code> · end: <code>{end}</code>
+  </p>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Equity</h2>
+      <canvas id="equity"></canvas>
+      <p class="muted">bars_processed={bars_processed} trades={trades} net_profit={net_profit:.4} sharpe={sharpe:.4} max_drawdown={max_drawdown:.4}</p>
+    </div>
+    <div class="card">
+      <h2>Trades</h2>
+      <table id="trades_table">
+        <thead>
+          <tr>
+            <th>ts</th>
+            <th>side</th>
+            <th>qty</th>
+            <th>price</th>
+            <th>fee</th>
+            <th>slippage</th>
+            <th>strategy</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const equity = {equity_json};
+    const trades = {trades_json};
+
+    function drawLine(canvas, points) {{
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width = canvas.clientWidth * window.devicePixelRatio;
+      const h = canvas.height = canvas.clientHeight * window.devicePixelRatio;
+      ctx.clearRect(0, 0, w, h);
+
+      if (!points || points.length < 2) {{
+        ctx.fillStyle = '#666';
+        ctx.fillText('no equity data', 10, 20);
+        return;
+      }}
+
+      const values = points.map(p => p.equity);
+      const minV = Math.min(...values);
+      const maxV = Math.max(...values);
+      const pad = 20 * window.devicePixelRatio;
+      const x0 = pad, y0 = pad, x1 = w - pad, y1 = h - pad;
+
+      function x(i) {{
+        return x0 + (i / (points.length - 1)) * (x1 - x0);
+      }}
+      function y(v) {{
+        if (maxV === minV) return (y0 + y1) / 2;
+        const t = (v - minV) / (maxV - minV);
+        return y1 - t * (y1 - y0);
+      }}
+
+      ctx.strokeStyle = '#2b6cb0';
+      ctx.lineWidth = 2 * window.devicePixelRatio;
+      ctx.beginPath();
+      ctx.moveTo(x(0), y(points[0].equity));
+      for (let i = 1; i < points.length; i++) {{
+        ctx.lineTo(x(i), y(points[i].equity));
+      }}
+      ctx.stroke();
+    }}
+
+    function renderTrades(tableId, trades) {{
+      const tbody = document.querySelector(`#${{tableId}} tbody`);
+      tbody.innerHTML = '';
+      for (const t of trades) {{
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${{t.timestamp}}</td>
+          <td>${{t.side}}</td>
+          <td>${{t.quantity}}</td>
+          <td>${{t.price}}</td>
+          <td>${{t.fee}}</td>
+          <td>${{t.slippage}}</td>
+          <td>${{t.strategy_id}}</td>
+        `;
+        tbody.appendChild(tr);
+      }}
+    }}
+
+    drawLine(document.getElementById('equity'), equity);
+    renderTrades('trades_table', trades);
+    window.addEventListener('resize', () => drawLine(document.getElementById('equity'), equity));
+  </script>
+</body>
+</html>"#,
+        bars_processed = summary.bars_processed,
+        trades = summary.trades,
+        net_profit = summary.net_profit,
+        sharpe = summary.sharpe,
+        max_drawdown = summary.max_drawdown,
+    );
+
+    let mut file =
+        fs::File::create(path).map_err(|err| format!("failed to create html: {}", err))?;
+    file.write_all(html.as_bytes())
+        .map_err(|err| format!("failed to write html: {}", err))
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 struct TradeRecord {
     timestamp_utc: i64,

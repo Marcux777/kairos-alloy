@@ -8,6 +8,8 @@ use kairos_domain::services::audit::AuditEvent;
 use kairos_domain::value_objects::equity_point::EquityPoint;
 use kairos_domain::value_objects::trade::Trade;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
+use tracing::info_span;
 
 pub struct GenerateReportResult {
     pub input_dir: PathBuf,
@@ -21,6 +23,9 @@ pub fn generate_report(
     reader: &dyn ArtifactReader,
     writer: &dyn ArtifactWriter,
 ) -> Result<GenerateReportResult, String> {
+    let _span = info_span!("generate_report", input_dir = %input_dir.display()).entered();
+
+    let stage_start = Instant::now();
     let trades_path = input_dir.join("trades.csv");
     let equity_path = input_dir.join("equity.csv");
     let config_path = input_dir.join("config_snapshot.toml");
@@ -35,6 +40,10 @@ pub fn generate_report(
     let trades = reader.read_trades_csv(&trades_path)?;
     let equity = reader.read_equity_csv(&equity_path)?;
     let summary = recompute_summary(&trades, &equity);
+    metrics::histogram!("kairos.report.generate_ms")
+        .record(stage_start.elapsed().as_millis() as f64);
+    metrics::gauge!("kairos.report.trades").set(trades.len() as f64);
+    metrics::gauge!("kairos.report.bars_processed").set(summary.bars_processed as f64);
 
     let config_toml = reader.read_config_snapshot_toml(&config_path)?;
     let (run_id, meta, config_snapshot, wrote_html) = match config_toml
@@ -75,6 +84,13 @@ pub fn generate_report(
             input_dir.join("summary.html").as_path(),
             &summary,
             meta.as_ref(),
+        )?;
+        writer.write_dashboard_html(
+            input_dir.join("dashboard.html").as_path(),
+            &summary,
+            meta.as_ref(),
+            &trades,
+            &equity,
         )?;
     }
 

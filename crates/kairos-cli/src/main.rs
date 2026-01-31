@@ -1,6 +1,7 @@
 mod commands;
 mod config;
 mod infra;
+mod obs;
 mod output;
 
 use clap::{CommandFactory, Parser, Subcommand};
@@ -20,6 +21,18 @@ struct Cli {
     /// Print build metadata (version, commit, toolchain) and exit.
     #[arg(long, default_value_t = false)]
     build_info: bool,
+
+    /// Runtime log filter (EnvFilter). Also supports KAIROS_LOG env var.
+    #[arg(long, default_value = "info")]
+    log_level: String,
+
+    /// Log format: pretty | json
+    #[arg(long, default_value = "pretty")]
+    log_format: String,
+
+    /// Prometheus metrics listen addr (e.g. 127.0.0.1:9898). Optional.
+    #[arg(long)]
+    metrics_addr: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -43,6 +56,10 @@ enum CliCommand {
         /// Print a single JSON line instead of human output.
         #[arg(long, default_value_t = false)]
         json: bool,
+
+        /// Write a CPU profile as an SVG flamegraph to this path (requires feature `pprof`).
+        #[arg(long)]
+        profile_svg: Option<PathBuf>,
     },
     Paper {
         #[arg(long)]
@@ -72,6 +89,15 @@ fn main() {
         return;
     }
 
+    if let Err(err) = obs::init_tracing(&cli.log_level, &cli.log_format) {
+        eprintln!("error: {err}");
+        std::process::exit(1);
+    }
+    if let Err(err) = obs::init_metrics(cli.metrics_addr.as_deref()) {
+        eprintln!("error: {err}");
+        std::process::exit(1);
+    }
+
     let command = match cli.command {
         Some(command) => command,
         None => {
@@ -91,11 +117,13 @@ fn main() {
             step_seconds,
             mode,
             json,
+            profile_svg,
         } => Command::Bench {
             bars,
             step_seconds,
             mode,
             json,
+            profile_svg,
         },
         CliCommand::Paper { config, out } => Command::Paper { config, out },
         CliCommand::Validate {
@@ -109,6 +137,18 @@ fn main() {
         },
         CliCommand::Report { input } => Command::Report { input },
     };
+
+    metrics::counter!(
+        "kairos.cli.command.invocations",
+        "command" => match &command {
+            Command::Backtest { .. } => "backtest",
+            Command::Bench { .. } => "bench",
+            Command::Paper { .. } => "paper",
+            Command::Validate { .. } => "validate",
+            Command::Report { .. } => "report",
+        }
+    )
+    .increment(1);
 
     if let Err(err) = commands::run(command) {
         eprintln!("error: {}", err);

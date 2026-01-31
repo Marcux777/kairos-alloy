@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, PartialEq)]
+use serde::Serialize;
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct EquityPoint {
     pub timestamp: i64,
     pub equity: f64,

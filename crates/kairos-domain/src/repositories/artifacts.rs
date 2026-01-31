@@ -21,6 +21,14 @@ pub trait ArtifactWriter {
         summary: &MetricsSummary,
         meta: Option<&serde_json::Value>,
     ) -> Result<(), String>;
+    fn write_dashboard_html(
+        &self,
+        path: &Path,
+        summary: &MetricsSummary,
+        meta: Option<&serde_json::Value>,
+        trades: &[Trade],
+        equity: &[EquityPoint],
+    ) -> Result<(), String>;
     fn write_audit_jsonl(&self, path: &Path, events: &[AuditEvent]) -> Result<(), String>;
     fn write_config_snapshot_toml(&self, path: &Path, contents: &str) -> Result<(), String>;
 }

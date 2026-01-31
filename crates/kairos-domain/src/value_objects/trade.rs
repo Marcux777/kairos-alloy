@@ -1,6 +1,7 @@
 use crate::value_objects::side::Side;
+use serde::Serialize;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Trade {
     pub timestamp: i64,
     pub symbol: String,
