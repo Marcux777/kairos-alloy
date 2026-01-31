@@ -29,16 +29,24 @@ fn parse_summary_meta(meta: &serde_json::Value) -> Option<reporting::SummaryMeta
 
 fn record_write_metrics(kind: &'static str, start: Instant, result: &Result<(), String>) {
     let result_label = if result.is_ok() { "ok" } else { "err" };
-    metrics::counter!("kairos.infra.artifacts.write.calls", "kind" => kind, "result" => result_label)
-        .increment(1);
+    metrics::counter!(
+        "kairos.infra.artifacts.write.calls_total",
+        "kind" => kind,
+        "result" => result_label
+    )
+    .increment(1);
     metrics::histogram!("kairos.infra.artifacts.write_ms", "kind" => kind, "result" => result_label)
         .record(start.elapsed().as_millis() as f64);
 }
 
 fn record_read_metrics<T>(kind: &'static str, start: Instant, result: &Result<T, String>) {
     let result_label = if result.is_ok() { "ok" } else { "err" };
-    metrics::counter!("kairos.infra.artifacts.read.calls", "kind" => kind, "result" => result_label)
-        .increment(1);
+    metrics::counter!(
+        "kairos.infra.artifacts.read.calls_total",
+        "kind" => kind,
+        "result" => result_label
+    )
+    .increment(1);
     metrics::histogram!("kairos.infra.artifacts.read_ms", "kind" => kind, "result" => result_label)
         .record(start.elapsed().as_millis() as f64);
 }

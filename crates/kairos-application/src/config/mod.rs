@@ -46,6 +46,7 @@ pub struct DbConfig {
     pub exchange: String,
     pub market: String,
     pub source_timeframe: Option<String>,
+    pub pool_max_size: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -332,5 +333,52 @@ feature_version = "v1"
 
         let config = parse_config(toml_str);
         assert!(config.db.url.is_none());
+    }
+
+    #[test]
+    fn parse_config_allows_db_pool_max_size() {
+        let toml_str = r#"
+[run]
+run_id = "x"
+symbol = "BTCUSD"
+timeframe = "1m"
+initial_capital = 100.0
+
+[db]
+ohlcv_table = "ohlcv_candles"
+exchange = "kucoin"
+market = "spot"
+pool_max_size = 4
+
+[paths]
+out_dir = "runs/"
+
+[costs]
+fee_bps = 0.0
+slippage_bps = 0.0
+
+[risk]
+max_position_qty = 1.0
+max_drawdown_pct = 1.0
+max_exposure_pct = 1.0
+
+[features]
+return_mode = "pct"
+sma_windows = [2]
+rsi_enabled = false
+sentiment_lag = "0s"
+
+[agent]
+mode = "baseline"
+url = "http://127.0.0.1:8000"
+timeout_ms = 200
+retries = 0
+fallback_action = "HOLD"
+api_version = "v1"
+feature_version = "v1"
+"#;
+
+        let config = parse_config(toml_str);
+        assert_eq!(config.db.pool_max_size, Some(4));
     }
 }

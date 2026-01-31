@@ -159,6 +159,7 @@ fn minimal_config() -> Config {
             exchange: "kucoin".to_string(),
             market: "spot".to_string(),
             source_timeframe: None,
+            pool_max_size: None,
         },
         paths: kairos_application::config::PathsConfig {
             sentiment_path: None,

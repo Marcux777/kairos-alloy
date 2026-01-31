@@ -139,7 +139,7 @@ fn main() {
     };
 
     metrics::counter!(
-        "kairos.cli.command.invocations",
+        "kairos.cli.command.invocations_total",
         "command" => match &command {
             Command::Backtest { .. } => "backtest",
             Command::Bench { .. } => "bench",

@@ -10,6 +10,8 @@ initial_capital = 10000.0
 ohlcv_table = "ohlcv_candles"
 exchange = "kucoin"
 market = "spot"
+# Optional: postgres connection pool size (default: 8).
+# pool_max_size = 8
 # Optional: if your DB stores a smaller timeframe (e.g. "1min") but you want to run at "5min",
 # set this to the stored timeframe and Kairos Alloy will resample to `run.timeframe`.
 # source_timeframe = "1min"

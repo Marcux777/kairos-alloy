@@ -12,6 +12,8 @@ initial_capital = 10000.0
 ohlcv_table = "ohlcv_candles"
 exchange = "kucoin"
 market = "spot"
+# Optional: postgres connection pool size (default: 8).
+# pool_max_size = 8
 
 [paths]
 out_dir = "runs/"

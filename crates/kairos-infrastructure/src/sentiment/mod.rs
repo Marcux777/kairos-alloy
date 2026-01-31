@@ -54,7 +54,7 @@ impl kairos_domain::repositories::sentiment::SentimentRepository for FilesystemS
 
         match &result {
             Ok((points, report)) => {
-                metrics::counter!("kairos.infra.sentiment.load.calls", "result" => "ok")
+                metrics::counter!("kairos.infra.sentiment.load.calls_total", "result" => "ok")
                     .increment(1);
                 metrics::counter!(
                     "kairos.infra.sentiment.points_loaded_total",
@@ -116,7 +116,7 @@ impl kairos_domain::repositories::sentiment::SentimentRepository for FilesystemS
                 );
             }
             Err(err) => {
-                metrics::counter!("kairos.infra.sentiment.load.calls", "result" => "err")
+                metrics::counter!("kairos.infra.sentiment.load.calls_total", "result" => "err")
                     .increment(1);
                 metrics::histogram!(
                     "kairos.infra.sentiment.load_ms",

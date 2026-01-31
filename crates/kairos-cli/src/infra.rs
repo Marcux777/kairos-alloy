@@ -59,10 +59,12 @@ fn resolve_db_url(config: &Config) -> Result<String, String> {
 
 fn build_market_data_repo(config: &Config) -> Result<Box<dyn MarketDataRepository>, String> {
     let db_url = resolve_db_url(config)?;
+    let pool_max_size = config.db.pool_max_size.unwrap_or(8);
     Ok(Box::new(PostgresMarketDataRepository::new(
         db_url,
         config.db.ohlcv_table.to_string(),
-    )))
+        pool_max_size,
+    )?))
 }
 
 fn build_remote_agent(config: &Config) -> Result<Option<Box<dyn AgentPort>>, String> {
