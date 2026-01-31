@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use kairos_domain::services::ohlcv::DataQualityReport;
 use kairos_domain::value_objects::bar::Bar;
 use postgres::{Client, NoTls};
+use std::time::Instant;
 
 #[derive(Debug, Clone)]
 pub struct PostgresMarketDataRepository {
@@ -46,9 +47,32 @@ pub fn load_postgres(
     timeframe: &str,
     expected_step_seconds: Option<i64>,
 ) -> Result<(Vec<Bar>, DataQualityReport), String> {
+    let overall_start = Instant::now();
+    let span = tracing::info_span!(
+        "infra.postgres.load_ohlcv",
+        table = %table,
+        exchange = %exchange,
+        market = %market,
+        symbol = %symbol,
+        timeframe = %timeframe
+    );
+    let _enter = span.enter();
+
     validate_table_name(table)?;
-    let mut client = Client::connect(db_url, NoTls)
-        .map_err(|err| format!("failed to connect to postgres: {err}"))?;
+
+    let connect_start = Instant::now();
+    let mut client = match Client::connect(db_url, NoTls) {
+        Ok(client) => client,
+        Err(err) => {
+            metrics::counter!("kairos.infra.postgres.load_ohlcv.calls", "result" => "err")
+                .increment(1);
+            metrics::counter!("kairos.infra.postgres.load_ohlcv.errors", "stage" => "connect")
+                .increment(1);
+            return Err(format!("failed to connect to postgres: {err}"));
+        }
+    };
+    metrics::histogram!("kairos.infra.postgres.connect_ms")
+        .record(connect_start.elapsed().as_millis() as f64);
 
     let query = format!(
         "SELECT timestamp_utc, open, high, low, close, volume FROM {} \
@@ -56,9 +80,19 @@ pub fn load_postgres(
          ORDER BY timestamp_utc ASC",
         table
     );
-    let rows = client
-        .query(&query, &[&exchange, &market, &symbol, &timeframe])
-        .map_err(|err| format!("failed to query OHLCV: {err}"))?;
+    let query_start = Instant::now();
+    let rows = match client.query(&query, &[&exchange, &market, &symbol, &timeframe]) {
+        Ok(rows) => rows,
+        Err(err) => {
+            metrics::counter!("kairos.infra.postgres.load_ohlcv.calls", "result" => "err")
+                .increment(1);
+            metrics::counter!("kairos.infra.postgres.load_ohlcv.errors", "stage" => "query")
+                .increment(1);
+            return Err(format!("failed to query OHLCV: {err}"));
+        }
+    };
+    metrics::histogram!("kairos.infra.postgres.query_ms")
+        .record(query_start.elapsed().as_millis() as f64);
 
     let mut bars = Vec::with_capacity(rows.len());
     let mut report = DataQualityReport::default();
@@ -119,6 +153,24 @@ pub fn load_postgres(
     }
 
     report.max_gap_seconds = max_gap;
+
+    metrics::counter!("kairos.infra.postgres.load_ohlcv.calls", "result" => "ok").increment(1);
+    metrics::histogram!("kairos.infra.postgres.load_ohlcv_ms")
+        .record(overall_start.elapsed().as_millis() as f64);
+    metrics::gauge!("kairos.infra.postgres.load_ohlcv.bars_loaded").set(bars.len() as f64);
+    metrics::gauge!("kairos.infra.postgres.load_ohlcv.invalid_close")
+        .set(report.invalid_close as f64);
+    metrics::gauge!("kairos.infra.postgres.load_ohlcv.duplicates").set(report.duplicates as f64);
+    metrics::gauge!("kairos.infra.postgres.load_ohlcv.gaps").set(report.gaps as f64);
+
+    tracing::debug!(
+        bars = bars.len(),
+        invalid_close = report.invalid_close,
+        duplicates = report.duplicates,
+        gaps = report.gaps,
+        out_of_order = report.out_of_order,
+        "loaded OHLCV"
+    );
     Ok((bars, report))
 }
 

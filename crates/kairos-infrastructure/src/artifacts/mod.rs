@@ -6,6 +6,7 @@ use kairos_domain::value_objects::equity_point::EquityPoint;
 use kairos_domain::value_objects::trade::Trade;
 use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FilesystemArtifactWriter;
@@ -26,18 +27,43 @@ fn parse_summary_meta(meta: &serde_json::Value) -> Option<reporting::SummaryMeta
     })
 }
 
+fn record_write_metrics(kind: &'static str, start: Instant, result: &Result<(), String>) {
+    let result_label = if result.is_ok() { "ok" } else { "err" };
+    metrics::counter!("kairos.infra.artifacts.write.calls", "kind" => kind, "result" => result_label)
+        .increment(1);
+    metrics::histogram!("kairos.infra.artifacts.write_ms", "kind" => kind, "result" => result_label)
+        .record(start.elapsed().as_millis() as f64);
+}
+
+fn record_read_metrics<T>(kind: &'static str, start: Instant, result: &Result<T, String>) {
+    let result_label = if result.is_ok() { "ok" } else { "err" };
+    metrics::counter!("kairos.infra.artifacts.read.calls", "kind" => kind, "result" => result_label)
+        .increment(1);
+    metrics::histogram!("kairos.infra.artifacts.read_ms", "kind" => kind, "result" => result_label)
+        .record(start.elapsed().as_millis() as f64);
+}
+
 impl ArtifactWriter for FilesystemArtifactWriter {
     fn ensure_dir(&self, path: &Path) -> Result<(), String> {
-        fs::create_dir_all(path)
-            .map_err(|err| format!("failed to create dir {}: {}", path.display(), err))
+        let start = Instant::now();
+        let result = fs::create_dir_all(path)
+            .map_err(|err| format!("failed to create dir {}: {}", path.display(), err));
+        record_write_metrics("ensure_dir", start, &result);
+        result
     }
 
     fn write_trades_csv(&self, path: &Path, trades: &[Trade]) -> Result<(), String> {
-        reporting::write_trades_csv(path, trades)
+        let start = Instant::now();
+        let result = reporting::write_trades_csv(path, trades);
+        record_write_metrics("trades_csv", start, &result);
+        result
     }
 
     fn write_equity_csv(&self, path: &Path, points: &[EquityPoint]) -> Result<(), String> {
-        reporting::write_equity_csv(path, points)
+        let start = Instant::now();
+        let result = reporting::write_equity_csv(path, points);
+        record_write_metrics("equity_csv", start, &result);
+        result
     }
 
     fn write_summary_json(
@@ -48,7 +74,10 @@ impl ArtifactWriter for FilesystemArtifactWriter {
         config_snapshot: Option<&serde_json::Value>,
     ) -> Result<(), String> {
         let parsed = meta.and_then(parse_summary_meta);
-        reporting::write_summary_json(path, summary, parsed.as_ref(), config_snapshot)
+        let start = Instant::now();
+        let result = reporting::write_summary_json(path, summary, parsed.as_ref(), config_snapshot);
+        record_write_metrics("summary_json", start, &result);
+        result
     }
 
     fn write_summary_html(
@@ -58,7 +87,10 @@ impl ArtifactWriter for FilesystemArtifactWriter {
         meta: Option<&serde_json::Value>,
     ) -> Result<(), String> {
         let parsed = meta.and_then(parse_summary_meta);
-        reporting::write_summary_html(path, summary, parsed.as_ref())
+        let start = Instant::now();
+        let result = reporting::write_summary_html(path, summary, parsed.as_ref());
+        record_write_metrics("summary_html", start, &result);
+        result
     }
 
     fn write_dashboard_html(
@@ -70,21 +102,31 @@ impl ArtifactWriter for FilesystemArtifactWriter {
         equity: &[EquityPoint],
     ) -> Result<(), String> {
         let parsed = meta.and_then(parse_summary_meta);
-        reporting::write_dashboard_html(path, summary, parsed.as_ref(), trades, equity)
+        let start = Instant::now();
+        let result =
+            reporting::write_dashboard_html(path, summary, parsed.as_ref(), trades, equity);
+        record_write_metrics("dashboard_html", start, &result);
+        result
     }
 
     fn write_audit_jsonl(&self, path: &Path, events: &[AuditEvent]) -> Result<(), String> {
-        reporting::write_audit_jsonl(path, events)
+        let start = Instant::now();
+        let result = reporting::write_audit_jsonl(path, events);
+        record_write_metrics("logs_jsonl", start, &result);
+        result
     }
 
     fn write_config_snapshot_toml(&self, path: &Path, contents: &str) -> Result<(), String> {
-        fs::write(path, contents).map_err(|err| {
+        let start = Instant::now();
+        let result = fs::write(path, contents).map_err(|err| {
             format!(
                 "failed to write config snapshot {}: {}",
                 path.display(),
                 err
             )
-        })
+        });
+        record_write_metrics("config_snapshot_toml", start, &result);
+        result
     }
 }
 
@@ -99,20 +141,34 @@ impl FilesystemArtifactReader {
 
 impl ArtifactReader for FilesystemArtifactReader {
     fn read_trades_csv(&self, path: &Path) -> Result<Vec<Trade>, String> {
-        reporting::read_trades_csv(path)
+        let start = Instant::now();
+        let result = reporting::read_trades_csv(path);
+        record_read_metrics("trades_csv", start, &result);
+        result
     }
 
     fn read_equity_csv(&self, path: &Path) -> Result<Vec<EquityPoint>, String> {
-        reporting::read_equity_csv(path)
+        let start = Instant::now();
+        let result = reporting::read_equity_csv(path);
+        record_read_metrics("equity_csv", start, &result);
+        result
     }
 
     fn read_config_snapshot_toml(&self, path: &Path) -> Result<Option<String>, String> {
+        let start = Instant::now();
         if !path.exists() {
+            record_read_metrics(
+                "config_snapshot_toml",
+                start,
+                &Ok::<Option<String>, String>(None),
+            );
             return Ok(None);
         }
-        fs::read_to_string(path)
+        let result = fs::read_to_string(path)
             .map(Some)
-            .map_err(|err| format!("failed to read config snapshot {}: {}", path.display(), err))
+            .map_err(|err| format!("failed to read config snapshot {}: {}", path.display(), err));
+        record_read_metrics("config_snapshot_toml", start, &result);
+        result
     }
 
     fn exists(&self, path: &Path) -> bool {

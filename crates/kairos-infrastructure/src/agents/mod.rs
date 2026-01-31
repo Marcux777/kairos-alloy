@@ -78,6 +78,17 @@ impl AgentClient {
 
     pub fn act_detailed(&self, request: &ActionRequest) -> AgentCallResult {
         let endpoint = format!("{}/v1/act", self.url.trim_end_matches('/'));
+        let span = tracing::info_span!(
+            "infra.agent.act",
+            base_url = %self.url,
+            endpoint = %endpoint,
+            api_version = %self.api_version,
+            feature_version = %self.feature_version,
+            timeout_ms = self.timeout_ms,
+            retries = self.retries
+        );
+        let _enter = span.enter();
+
         let start = Instant::now();
         let mut attempts = 0u32;
         let mut last_status: Option<u16> = None;
@@ -85,14 +96,42 @@ impl AgentClient {
 
         while attempts <= self.retries {
             attempts += 1;
+            if attempts > 1 {
+                metrics::counter!("kairos.infra.agent.retries_total", "endpoint" => "act")
+                    .increment(1);
+                tracing::debug!(attempt = attempts, "retrying agent request");
+            }
+
+            metrics::counter!("kairos.infra.agent.requests_total", "endpoint" => "act")
+                .increment(1);
+            let attempt_start = Instant::now();
             let response = self.client.post(&endpoint).json(request).send();
             match response {
                 Ok(resp) => {
                     last_status = Some(resp.status().as_u16());
+                    metrics::histogram!(
+                        "kairos.infra.agent.attempt_ms",
+                        "endpoint" => "act",
+                        "status" => resp.status().as_u16().to_string()
+                    )
+                    .record(attempt_start.elapsed().as_millis() as f64);
+
                     if resp.status() == StatusCode::OK {
                         match resp.json::<ActionResponse>() {
                             Ok(parsed) => match validate_action_response(&parsed) {
                                 Ok(()) => {
+                                    metrics::histogram!(
+                                        "kairos.infra.agent.call_ms",
+                                        "endpoint" => "act",
+                                        "result" => "ok"
+                                    )
+                                    .record(start.elapsed().as_millis() as f64);
+                                    metrics::histogram!(
+                                        "kairos.infra.agent.attempts",
+                                        "endpoint" => "act"
+                                    )
+                                    .record(attempts as f64);
+
                                     return AgentCallResult {
                                         info: AgentCallInfo {
                                             attempts,
@@ -125,6 +164,12 @@ impl AgentClient {
                     break;
                 }
                 Err(err) => {
+                    metrics::histogram!(
+                        "kairos.infra.agent.attempt_ms",
+                        "endpoint" => "act",
+                        "status" => "err"
+                    )
+                    .record(attempt_start.elapsed().as_millis() as f64);
                     last_error = Some(format!("agent request failed: {err}"));
                     if attempts <= self.retries {
                         continue;
@@ -133,6 +178,22 @@ impl AgentClient {
                 }
             }
         }
+
+        metrics::counter!("kairos.infra.agent.errors_total", "endpoint" => "act").increment(1);
+        metrics::histogram!(
+            "kairos.infra.agent.call_ms",
+            "endpoint" => "act",
+            "result" => "err"
+        )
+        .record(start.elapsed().as_millis() as f64);
+        metrics::histogram!("kairos.infra.agent.attempts", "endpoint" => "act")
+            .record(attempts as f64);
+        tracing::warn!(
+            attempts,
+            status = ?last_status,
+            error = last_error.as_deref().unwrap_or("unknown"),
+            "agent request failed"
+        );
 
         AgentCallResult {
             info: AgentCallInfo {
@@ -171,6 +232,18 @@ impl AgentClient {
         }
 
         let endpoint = format!("{}/v1/act_batch", self.url.trim_end_matches('/'));
+        let span = tracing::info_span!(
+            "infra.agent.act_batch",
+            base_url = %self.url,
+            endpoint = %endpoint,
+            api_version = %self.api_version,
+            feature_version = %self.feature_version,
+            timeout_ms = self.timeout_ms,
+            retries = self.retries,
+            batch_size = batch.items.len()
+        );
+        let _enter = span.enter();
+
         let start = Instant::now();
         let mut attempts = 0u32;
         let mut last_status: Option<u16> = None;
@@ -178,10 +251,26 @@ impl AgentClient {
 
         while attempts <= self.retries {
             attempts += 1;
+            if attempts > 1 {
+                metrics::counter!("kairos.infra.agent.retries_total", "endpoint" => "act_batch")
+                    .increment(1);
+                tracing::debug!(attempt = attempts, "retrying agent batch request");
+            }
+
+            metrics::counter!("kairos.infra.agent.requests_total", "endpoint" => "act_batch")
+                .increment(1);
+            let attempt_start = Instant::now();
             let response = self.client.post(&endpoint).json(batch).send();
             match response {
                 Ok(resp) => {
                     last_status = Some(resp.status().as_u16());
+                    metrics::histogram!(
+                        "kairos.infra.agent.attempt_ms",
+                        "endpoint" => "act_batch",
+                        "status" => resp.status().as_u16().to_string()
+                    )
+                    .record(attempt_start.elapsed().as_millis() as f64);
+
                     if resp.status() == StatusCode::OK {
                         match resp.json::<ActionBatchResponse>() {
                             Ok(parsed) => {
@@ -200,6 +289,18 @@ impl AgentClient {
                                     }
                                 }
                                 if last_error.is_none() {
+                                    metrics::histogram!(
+                                        "kairos.infra.agent.call_ms",
+                                        "endpoint" => "act_batch",
+                                        "result" => "ok"
+                                    )
+                                    .record(start.elapsed().as_millis() as f64);
+                                    metrics::histogram!(
+                                        "kairos.infra.agent.attempts",
+                                        "endpoint" => "act_batch"
+                                    )
+                                    .record(attempts as f64);
+
                                     return AgentBatchCallResult {
                                         info: AgentCallInfo {
                                             attempts,
@@ -230,6 +331,13 @@ impl AgentClient {
                     break;
                 }
                 Err(err) => {
+                    metrics::histogram!(
+                        "kairos.infra.agent.attempt_ms",
+                        "endpoint" => "act_batch",
+                        "status" => "err"
+                    )
+                    .record(attempt_start.elapsed().as_millis() as f64);
+
                     last_error = Some(format!("agent request failed: {err}"));
                     if attempts <= self.retries {
                         continue;
@@ -238,6 +346,23 @@ impl AgentClient {
                 }
             }
         }
+
+        metrics::counter!("kairos.infra.agent.errors_total", "endpoint" => "act_batch")
+            .increment(1);
+        metrics::histogram!(
+            "kairos.infra.agent.call_ms",
+            "endpoint" => "act_batch",
+            "result" => "err"
+        )
+        .record(start.elapsed().as_millis() as f64);
+        metrics::histogram!("kairos.infra.agent.attempts", "endpoint" => "act_batch")
+            .record(attempts as f64);
+        tracing::warn!(
+            attempts,
+            status = ?last_status,
+            error = last_error.as_deref().unwrap_or("unknown"),
+            "agent batch request failed"
+        );
 
         AgentBatchCallResult {
             info: AgentCallInfo {
