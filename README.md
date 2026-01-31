@@ -161,9 +161,32 @@ Logs (por padrão: `info`, formato `pretty`):
 Métricas (Prometheus):
 
 - `--metrics-addr 127.0.0.1:9898` habilita um endpoint HTTP em `/metrics`
-- Métricas infra (principais):
-  - Postgres OHLCV: `kairos.infra.postgres.load_ohlcv_ms`, `kairos.infra.postgres.connect_ms`, `kairos.infra.postgres.query_ms`, `kairos.infra.postgres.load_ohlcv.rows_returned`, `kairos.infra.postgres.load_ohlcv.bars_loaded`, `kairos.infra.postgres.load_ohlcv.errors`
-  - Sentimento (CSV/JSON): `kairos.infra.sentiment.load_ms`, `kairos.infra.sentiment.points_loaded`, `kairos.infra.sentiment.load.errors_total` (labels `format`/`policy`/`stage`)
+- No `/metrics`, `.` vira `_` (ex.: `kairos.infra.postgres.query_ms` → `kairos_infra_postgres_query_ms_*`).
+- Counters seguem a convenção Prometheus com sufixo `_total`.
+- Métricas infra (principais; exemplos de nomes no `/metrics`):
+  - Postgres OHLCV: `kairos_infra_postgres_pool_get_ms_bucket`, `kairos_infra_postgres_query_ms_bucket`, `kairos_infra_postgres_load_ohlcv_ms_bucket`, `kairos_infra_postgres_load_ohlcv_errors_total`
+  - Agent HTTP: `kairos_infra_agent_call_ms_bucket`, `kairos_infra_agent_errors_total`, `kairos_infra_agent_retries_total`
+  - Sentimento: `kairos_infra_sentiment_load_ms_bucket`, `kairos_infra_sentiment_load_errors_total`, `kairos_infra_sentiment_points_loaded_total`
+  - Artifacts: `kairos_infra_artifacts_write_ms_bucket`, `kairos_infra_artifacts_write_calls_total`
+
+### Grafana (dev)
+
+Subir Prometheus + Grafana (dashboards provisionados):
+
+```bash
+docker compose -f observability/docker-compose.observability.yml up -d
+```
+
+Rodar o CLI com métricas (ex.: `bench`):
+
+```bash
+cargo run -p kairos-cli --release -- --metrics-addr 0.0.0.0:9898 bench --bars 50000000 --mode features --json
+```
+
+Abrir:
+
+- Prometheus: `http://localhost:9090`
+- Grafana (login padrão): `http://localhost:3000` (user/pass: `admin`/`admin`)
 
 ## Ingestao OHLCV (PostgreSQL)
 

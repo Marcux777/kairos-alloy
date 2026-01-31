@@ -1,21 +1,33 @@
 use chrono::{DateTime, Utc};
 use kairos_domain::services::ohlcv::DataQualityReport;
 use kairos_domain::value_objects::bar::Bar;
-use postgres::{Client, NoTls};
+use postgres::NoTls;
+use r2d2::Pool;
+use r2d2_postgres::PostgresConnectionManager;
 use std::time::Instant;
 
 #[derive(Debug, Clone)]
 pub struct PostgresMarketDataRepository {
-    pub db_url: String,
+    pool: Pool<PostgresConnectionManager<NoTls>>,
     pub ohlcv_table: String,
 }
 
 impl PostgresMarketDataRepository {
-    pub fn new(db_url: String, ohlcv_table: String) -> Self {
-        Self {
-            db_url,
-            ohlcv_table,
+    pub fn new(db_url: String, ohlcv_table: String, pool_max_size: u32) -> Result<Self, String> {
+        if let Err(err) = validate_table_name(&ohlcv_table) {
+            return Err(format!("invalid ohlcv_table '{}': {}", ohlcv_table, err));
         }
+
+        let config = db_url
+            .parse::<postgres::Config>()
+            .map_err(|err| format!("invalid postgres db url: {err}"))?;
+        let manager = PostgresConnectionManager::new(config, NoTls);
+        let pool = Pool::builder()
+            .max_size(pool_max_size)
+            .build(manager)
+            .map_err(|err| format!("failed to build postgres pool: {err}"))?;
+
+        Ok(Self { pool, ohlcv_table })
     }
 }
 
@@ -27,7 +39,7 @@ impl kairos_domain::repositories::market_data::MarketDataRepository
         query: &kairos_domain::repositories::market_data::OhlcvQuery,
     ) -> Result<(Vec<Bar>, DataQualityReport), String> {
         load_postgres(
-            &self.db_url,
+            &self.pool,
             &self.ohlcv_table,
             &query.exchange,
             &query.market,
@@ -39,7 +51,7 @@ impl kairos_domain::repositories::market_data::MarketDataRepository
 }
 
 pub fn load_postgres(
-    db_url: &str,
+    pool: &Pool<PostgresConnectionManager<NoTls>>,
     table: &str,
     exchange: &str,
     market: &str,
@@ -59,27 +71,36 @@ pub fn load_postgres(
     let _enter = span.enter();
 
     if let Err(err) = validate_table_name(table) {
-        metrics::counter!("kairos.infra.postgres.load_ohlcv.calls", "result" => "err").increment(1);
-        metrics::counter!("kairos.infra.postgres.load_ohlcv.errors", "stage" => "validate_table")
+        metrics::counter!("kairos.infra.postgres.load_ohlcv.calls_total", "result" => "err")
             .increment(1);
+        metrics::counter!(
+            "kairos.infra.postgres.load_ohlcv.errors_total",
+            "stage" => "validate_table"
+        )
+        .increment(1);
         tracing::warn!(error = %err, "invalid table name");
         return Err(err);
     }
 
-    let connect_start = Instant::now();
-    let mut client = match Client::connect(db_url, NoTls) {
+    let get_start = Instant::now();
+    let mut client = match pool.get() {
         Ok(client) => client,
         Err(err) => {
-            metrics::counter!("kairos.infra.postgres.load_ohlcv.calls", "result" => "err")
+            metrics::counter!("kairos.infra.postgres.load_ohlcv.calls_total", "result" => "err")
                 .increment(1);
-            metrics::counter!("kairos.infra.postgres.load_ohlcv.errors", "stage" => "connect")
+            metrics::counter!(
+                "kairos.infra.postgres.load_ohlcv.errors_total",
+                "stage" => "pool_get"
+            )
+            .increment(1);
+            metrics::counter!("kairos.infra.postgres.pool.get.errors_total", "stage" => "get")
                 .increment(1);
-            tracing::error!(error = %err, "failed to connect to postgres");
-            return Err(format!("failed to connect to postgres: {err}"));
+            tracing::error!(error = %err, "failed to checkout postgres connection");
+            return Err(format!("failed to checkout postgres connection: {err}"));
         }
     };
-    metrics::histogram!("kairos.infra.postgres.connect_ms")
-        .record(connect_start.elapsed().as_secs_f64() * 1000.0);
+    metrics::histogram!("kairos.infra.postgres.pool.get_ms")
+        .record(get_start.elapsed().as_secs_f64() * 1000.0);
 
     let query = format!(
         "SELECT timestamp_utc, open, high, low, close, volume FROM {} \
@@ -91,9 +112,9 @@ pub fn load_postgres(
     let rows = match client.query(&query, &[&exchange, &market, &symbol, &timeframe]) {
         Ok(rows) => rows,
         Err(err) => {
-            metrics::counter!("kairos.infra.postgres.load_ohlcv.calls", "result" => "err")
+            metrics::counter!("kairos.infra.postgres.load_ohlcv.calls_total", "result" => "err")
                 .increment(1);
-            metrics::counter!("kairos.infra.postgres.load_ohlcv.errors", "stage" => "query")
+            metrics::counter!("kairos.infra.postgres.load_ohlcv.errors_total", "stage" => "query")
                 .increment(1);
             tracing::error!(error = %err, "failed to query OHLCV");
             return Err(format!("failed to query OHLCV: {err}"));
@@ -164,7 +185,8 @@ pub fn load_postgres(
 
     report.max_gap_seconds = max_gap;
 
-    metrics::counter!("kairos.infra.postgres.load_ohlcv.calls", "result" => "ok").increment(1);
+    metrics::counter!("kairos.infra.postgres.load_ohlcv.calls_total", "result" => "ok")
+        .increment(1);
     metrics::histogram!("kairos.infra.postgres.load_ohlcv_ms")
         .record(overall_start.elapsed().as_secs_f64() * 1000.0);
     metrics::gauge!("kairos.infra.postgres.load_ohlcv.rows_returned").set(rows_len as f64);
@@ -220,6 +242,9 @@ fn validate_table_name(table: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{load_postgres, validate_table_name};
+    use postgres::NoTls;
+    use r2d2::Pool;
+    use r2d2_postgres::PostgresConnectionManager;
 
     #[test]
     fn validate_table_name_accepts_schema() {
@@ -231,31 +256,28 @@ mod tests {
 
     #[test]
     fn load_postgres_rejects_invalid_table_name_before_connect() {
-        let err = load_postgres(
-            "postgres://invalid",
-            "ohlcv;drop",
-            "ex",
-            "spot",
-            "BTCUSD",
-            "1m",
-            None,
-        )
-        .expect_err("invalid table name");
+        let pool = build_pool("postgres://invalid");
+        let err = load_postgres(&pool, "ohlcv;drop", "ex", "spot", "BTCUSD", "1m", None)
+            .expect_err("invalid table name");
         assert!(err.contains("invalid table name"));
     }
 
     #[test]
     fn load_postgres_errors_on_invalid_db_url() {
-        let err = load_postgres(
-            "not a url",
-            "ohlcv_candles",
-            "ex",
-            "spot",
-            "BTCUSD",
-            "1m",
-            None,
+        let err = super::PostgresMarketDataRepository::new(
+            "not a url".to_string(),
+            "ohlcv_candles".to_string(),
+            1,
         )
         .expect_err("invalid db url should fail fast");
-        assert!(err.contains("failed to connect to postgres"));
+        assert!(err.contains("invalid postgres db url"));
+    }
+
+    fn build_pool(db_url: &str) -> Pool<PostgresConnectionManager<NoTls>> {
+        let config = db_url
+            .parse::<postgres::Config>()
+            .expect("test db url should parse");
+        let manager = PostgresConnectionManager::new(config, NoTls);
+        Pool::builder().max_size(1).build_unchecked(manager)
     }
 }

@@ -11,3 +11,4 @@ Notes:
 - `execution.*`: modela a semântica de execução. Em `model="complete"`, o engine suporta `market|limit|stop`, latência determinística em barras, TIF (GTC/IOC/FOK) e cap de liquidez via `bar.volume`.
 - `features.sentiment_missing`: controls how missing/invalid sentiment values are handled: `"error"` (default), `"zero_fill"`, `"forward_fill"`, `"drop_row"`.
 - Default `db.url` in `sample.toml` uses `db:5432` (the `docker compose` service name). If running outside compose, use `localhost:5432`.
+- `db.pool_max_size` (optional, default: 8): max connections for the Postgres OHLCV connection pool.

@@ -120,7 +120,7 @@ fn parse_timestamp(value: &str) -> Result<i64, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_csv, load_postgres};
+    use super::load_csv;
     use kairos_domain::services::ohlcv::{data_quality_from_bars, resample_bars};
     use kairos_domain::value_objects::bar::Bar;
     use std::fs;
@@ -187,11 +187,5 @@ mod tests {
         assert_eq!(report.gaps, 0);
         assert_eq!(report.duplicates, 0);
         assert_eq!(report.out_of_order, 0);
-    }
-
-    // `load_postgres` is covered by end-to-end integration tests in this repo.
-    #[allow(dead_code)]
-    fn _signature_check(_db_url: &str, _table: &str) {
-        let _ = load_postgres(_db_url, _table, "ex", "spot", "BTCUSD", "1min", Some(60));
     }
 }
