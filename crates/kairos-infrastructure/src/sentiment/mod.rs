@@ -4,6 +4,7 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::Path;
+use std::time::Instant;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FilesystemSentimentRepository;
@@ -13,14 +14,106 @@ impl kairos_domain::repositories::sentiment::SentimentRepository for FilesystemS
         &self,
         query: &kairos_domain::repositories::sentiment::SentimentQuery,
     ) -> Result<(Vec<SentimentPoint>, SentimentReport), String> {
-        match query.format {
+        let format_label = match query.format {
+            kairos_domain::repositories::sentiment::SentimentFormat::Csv => "csv",
+            kairos_domain::repositories::sentiment::SentimentFormat::Json => "json",
+        };
+        let policy_label = match query.missing_policy {
+            MissingValuePolicy::Error => "error",
+            MissingValuePolicy::ZeroFill => "zero_fill",
+            MissingValuePolicy::ForwardFill => "forward_fill",
+            MissingValuePolicy::DropRow => "drop_row",
+        };
+        let path_hint = query
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("<sentiment>");
+
+        let start = Instant::now();
+        let span = tracing::info_span!(
+            "infra.sentiment.load",
+            format = format_label,
+            missing_policy = policy_label,
+            path = path_hint
+        );
+        let _enter = span.enter();
+
+        let result = match query.format {
             kairos_domain::repositories::sentiment::SentimentFormat::Csv => {
                 load_csv_with_policy(query.path.as_path(), query.missing_policy)
             }
             kairos_domain::repositories::sentiment::SentimentFormat::Json => {
                 load_json_with_policy(query.path.as_path(), query.missing_policy)
             }
+        };
+
+        match &result {
+            Ok((points, report)) => {
+                metrics::counter!("kairos.infra.sentiment.load.calls", "result" => "ok")
+                    .increment(1);
+                metrics::histogram!(
+                    "kairos.infra.sentiment.load_ms",
+                    "format" => format_label,
+                    "policy" => policy_label,
+                    "result" => "ok"
+                )
+                .record(start.elapsed().as_millis() as f64);
+                metrics::gauge!(
+                    "kairos.infra.sentiment.points_loaded",
+                    "format" => format_label,
+                    "policy" => policy_label
+                )
+                .set(points.len() as f64);
+                metrics::gauge!(
+                    "kairos.infra.sentiment.missing_values",
+                    "format" => format_label,
+                    "policy" => policy_label
+                )
+                .set(report.missing_values as f64);
+                metrics::gauge!(
+                    "kairos.infra.sentiment.invalid_values",
+                    "format" => format_label,
+                    "policy" => policy_label
+                )
+                .set(report.invalid_values as f64);
+                metrics::gauge!(
+                    "kairos.infra.sentiment.duplicates",
+                    "format" => format_label,
+                    "policy" => policy_label
+                )
+                .set(report.duplicates as f64);
+                tracing::debug!(
+                    points = points.len(),
+                    missing_values = report.missing_values,
+                    invalid_values = report.invalid_values,
+                    duplicates = report.duplicates,
+                    out_of_order = report.out_of_order,
+                    dropped_rows = report.dropped_rows,
+                    "loaded sentiment"
+                );
+            }
+            Err(err) => {
+                metrics::counter!("kairos.infra.sentiment.load.calls", "result" => "err")
+                    .increment(1);
+                metrics::histogram!(
+                    "kairos.infra.sentiment.load_ms",
+                    "format" => format_label,
+                    "policy" => policy_label,
+                    "result" => "err"
+                )
+                .record(start.elapsed().as_millis() as f64);
+                metrics::counter!(
+                    "kairos.infra.sentiment.load.errors_total",
+                    "format" => format_label,
+                    "policy" => policy_label
+                )
+                .increment(1);
+                tracing::warn!(error = %err, "failed to load sentiment");
+            }
         }
+
+        result
     }
 }
 

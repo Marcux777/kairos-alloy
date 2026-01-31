@@ -1062,10 +1062,12 @@ dependencies = [
  "chrono",
  "csv",
  "kairos-domain",
+ "metrics",
  "postgres",
  "reqwest",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
