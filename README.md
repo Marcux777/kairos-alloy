@@ -177,6 +177,10 @@ Subir Prometheus + Grafana (dashboards provisionados):
 docker compose -f observability/docker-compose.observability.yml up -d
 ```
 
+Alertas:
+
+- Prometheus carrega regras em `observability/prometheus/alerts.yml` (veja em `http://localhost:9090/alerts`).
+
 Rodar o CLI com métricas (ex.: `bench`):
 
 ```bash

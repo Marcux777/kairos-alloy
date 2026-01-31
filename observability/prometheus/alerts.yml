@@ -1,0 +1,69 @@
+groups:
+  - name: kairos
+    rules:
+      - alert: KairosMetricsMissing
+        expr: absent(kairos_cli_command_invocations_total)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kairos metrics endpoint missing"
+          description: "No `kairos_cli_command_invocations_total` seen for 10m. Is `--metrics-addr` enabled and reachable?"
+
+      - alert: KairosAgentErrorRateHigh
+        expr: |
+          (
+            sum(rate(kairos_infra_agent_errors_total[5m]))
+            /
+            clamp_min(sum(rate(kairos_infra_agent_requests_total[5m])), 1e-9)
+          ) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Agent error ratio > 5%"
+          description: "HTTP agent adapter is erroring frequently (errors/requests > 5% for 10m)."
+
+      - alert: KairosSentimentLoadErrorsHigh
+        expr: sum(rate(kairos_infra_sentiment_load_errors_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sentiment loader errors detected"
+          description: "Sentiment parsing/loading is emitting errors. Check labels format/policy/stage."
+
+      - alert: KairosPostgresLoadErrorsHigh
+        expr: sum(rate(kairos_infra_postgres_load_ohlcv_errors_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Postgres OHLCV load errors detected"
+          description: "Postgres OHLCV loader is emitting errors. Check stage label (validate_table/pool_get/query)."
+
+      - alert: KairosPostgresLoadLatencyP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(kairos_infra_postgres_load_ohlcv_ms_bucket[5m])) by (le)
+          ) > 2000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Postgres OHLCV load p95 latency > 2000ms"
+          description: "p95 of Postgres OHLCV load is above 2s for 10m."
+
+      - alert: KairosPostgresPoolGetLatencyP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(kairos_infra_postgres_pool_get_ms_bucket[5m])) by (le)
+          ) > 250
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Postgres pool checkout p95 latency > 250ms"
+          description: "Connection pool checkout is slow, suggesting contention or DB issues."

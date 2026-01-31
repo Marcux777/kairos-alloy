@@ -18,8 +18,7 @@ Historically, the MVP used a single “core” crate that mixed:
 - domain logic (engine/portfolio/risk/metrics/strategy/types)
 - IO concerns (Postgres OHLCV loader, filesystem sentiment loader, HTTP agent client)
 
-**Status:** the workspace has since been split into `kairos-domain`, `kairos-infrastructure`, and `kairos-application`, and the old `kairos-core` crate has been removed. The CLI now acts as a thin composition root and delegates orchestration to `kairos-application` for backtest/paper/validate.
-`kairos-alloy report` is implemented via `kairos-application::reporting` (CLI delegates as a thin composition root).
+**Status:** the workspace has since been split into `kairos-domain`, `kairos-infrastructure`, and `kairos-application`, and the old `kairos-core` crate has been removed. The CLI now acts as a thin composition root and delegates orchestration to `kairos-application` for backtest/paper/validate/report/bench.
 
 ## Target workspace layout
 
@@ -150,14 +149,19 @@ pub trait Clock {
 
 ## Application layer (use cases)
 
-Implemented use cases live in `kairos-application/src/backtesting/`, `kairos-application/src/paper_trading/`, and `kairos-application/src/validation/`. Reporting and benchmarking can be migrated next to keep the CLI as a pure composition root.
+Use cases live in:
+- `kairos-application/src/backtesting/`
+- `kairos-application/src/paper_trading/`
+- `kairos-application/src/validation/`
+- `kairos-application/src/reporting/`
+- `kairos-application/src/benchmarking/`
 
 ### Use cases
 - `RunBacktest` (implemented)
 - `RunPaper` (implemented)
 - `ValidateData` (implemented)
-- `GenerateReport` (next; currently orchestrated in `kairos-cli`)
-- `BenchFeatures` (future; currently in `kairos-cli`)
+- `GenerateReport` (implemented)
+- `RunBench` (implemented)
 
 Each use case:
 - receives input config DTOs (already validated)
@@ -176,7 +180,8 @@ Adapters live in `kairos-infrastructure/src/`:
 
 ### Postgres OHLCV adapter
 - Implements `MarketDataRepository`
-- Uses `tokio-postgres` or `postgres` (choose one and standardize)
+- Uses `postgres` + a connection pool (`r2d2_postgres`) in `kairos-infrastructure` (sync adapter).
+  (Note: `kairos-ingest` uses `tokio-postgres` today; standardization is a follow-up task.)
 
 ### Filesystem sentiment adapter
 - Implements `SentimentRepository`
