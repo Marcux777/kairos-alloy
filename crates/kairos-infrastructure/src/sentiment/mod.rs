@@ -9,6 +9,15 @@ use std::time::Instant;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FilesystemSentimentRepository;
 
+fn policy_label(policy: MissingValuePolicy) -> &'static str {
+    match policy {
+        MissingValuePolicy::Error => "error",
+        MissingValuePolicy::ZeroFill => "zero_fill",
+        MissingValuePolicy::ForwardFill => "forward_fill",
+        MissingValuePolicy::DropRow => "drop_row",
+    }
+}
+
 impl kairos_domain::repositories::sentiment::SentimentRepository for FilesystemSentimentRepository {
     fn load_sentiment(
         &self,
@@ -18,12 +27,7 @@ impl kairos_domain::repositories::sentiment::SentimentRepository for FilesystemS
             kairos_domain::repositories::sentiment::SentimentFormat::Csv => "csv",
             kairos_domain::repositories::sentiment::SentimentFormat::Json => "json",
         };
-        let policy_label = match query.missing_policy {
-            MissingValuePolicy::Error => "error",
-            MissingValuePolicy::ZeroFill => "zero_fill",
-            MissingValuePolicy::ForwardFill => "forward_fill",
-            MissingValuePolicy::DropRow => "drop_row",
-        };
+        let policy_label = policy_label(query.missing_policy);
         let path_hint = query
             .path
             .file_name()
@@ -52,6 +56,12 @@ impl kairos_domain::repositories::sentiment::SentimentRepository for FilesystemS
             Ok((points, report)) => {
                 metrics::counter!("kairos.infra.sentiment.load.calls", "result" => "ok")
                     .increment(1);
+                metrics::counter!(
+                    "kairos.infra.sentiment.points_loaded_total",
+                    "format" => format_label,
+                    "policy" => policy_label
+                )
+                .increment(points.len() as u64);
                 metrics::histogram!(
                     "kairos.infra.sentiment.load_ms",
                     "format" => format_label,
@@ -83,6 +93,18 @@ impl kairos_domain::repositories::sentiment::SentimentRepository for FilesystemS
                     "policy" => policy_label
                 )
                 .set(report.duplicates as f64);
+                metrics::gauge!(
+                    "kairos.infra.sentiment.out_of_order",
+                    "format" => format_label,
+                    "policy" => policy_label
+                )
+                .set(report.out_of_order as f64);
+                metrics::gauge!(
+                    "kairos.infra.sentiment.dropped_rows",
+                    "format" => format_label,
+                    "policy" => policy_label
+                )
+                .set(report.dropped_rows as f64);
                 tracing::debug!(
                     points = points.len(),
                     missing_values = report.missing_values,
@@ -132,8 +154,17 @@ pub fn load_csv_with_policy(
     path: &Path,
     policy: MissingValuePolicy,
 ) -> Result<(Vec<SentimentPoint>, SentimentReport), String> {
-    let file = File::open(path)
-        .map_err(|err| format!("failed to open sentiment CSV {}: {}", path.display(), err))?;
+    let policy_label_value = policy_label(policy);
+    let file = File::open(path).map_err(|err| {
+        metrics::counter!(
+            "kairos.infra.sentiment.load.errors_total",
+            "format" => "csv",
+            "policy" => policy_label_value,
+            "stage" => "open"
+        )
+        .increment(1);
+        format!("failed to open sentiment CSV {}: {}", path.display(), err)
+    })?;
     let mut reader = csv::Reader::from_reader(file);
 
     let mut raw_by_ts: BTreeMap<i64, Vec<Option<f64>>> = BTreeMap::new();
@@ -142,17 +173,43 @@ pub fn load_csv_with_policy(
 
     let headers = reader
         .headers()
-        .map_err(|err| format!("failed to read sentiment CSV headers: {}", err))?
+        .map_err(|err| {
+            metrics::counter!(
+                "kairos.infra.sentiment.load.errors_total",
+                "format" => "csv",
+                "policy" => policy_label_value,
+                "stage" => "headers"
+            )
+            .increment(1);
+            format!("failed to read sentiment CSV headers: {}", err)
+        })?
         .clone();
     report.schema = headers.iter().skip(1).map(|h| h.to_string()).collect();
     let schema_len = report.schema.len();
 
     for result in reader.records() {
-        let record = result.map_err(|err| format!("failed to parse sentiment CSV row: {}", err))?;
+        let record = result.map_err(|err| {
+            metrics::counter!(
+                "kairos.infra.sentiment.load.errors_total",
+                "format" => "csv",
+                "policy" => policy_label_value,
+                "stage" => "parse_row"
+            )
+            .increment(1);
+            format!("failed to parse sentiment CSV row: {}", err)
+        })?;
         let timestamp_str = record
             .get(0)
             .ok_or_else(|| "missing timestamp_utc column".to_string())?;
-        let timestamp = parse_timestamp(timestamp_str)?;
+        let timestamp = parse_timestamp(timestamp_str).inspect_err(|_err| {
+            metrics::counter!(
+                "kairos.infra.sentiment.load.errors_total",
+                "format" => "csv",
+                "policy" => policy_label_value,
+                "stage" => "timestamp"
+            )
+            .increment(1);
+        })?;
 
         if report.first_timestamp.is_none() {
             report.first_timestamp = Some(timestamp);
@@ -182,6 +239,13 @@ pub fn load_csv_with_policy(
                     report.invalid_values += 1;
                     let column = headers.get(idx + 1).unwrap_or("unknown");
                     if matches!(policy, MissingValuePolicy::Error) {
+                        metrics::counter!(
+                            "kairos.infra.sentiment.load.errors_total",
+                            "format" => "csv",
+                            "policy" => policy_label_value,
+                            "stage" => "invalid_value"
+                        )
+                        .increment(1);
                         return Err(format!(
                             "invalid sentiment value '{}' in column {}",
                             raw, column
@@ -215,7 +279,14 @@ pub fn load_csv_with_policy(
                 }
                 None => match policy {
                     MissingValuePolicy::Error => {
-                        return Err(format!("missing sentiment value at ts={}", timestamp))
+                        metrics::counter!(
+                            "kairos.infra.sentiment.load.errors_total",
+                            "format" => "csv",
+                            "policy" => policy_label_value,
+                            "stage" => "missing_value"
+                        )
+                        .increment(1);
+                        return Err(format!("missing sentiment value at ts={}", timestamp));
                     }
                     MissingValuePolicy::ZeroFill => 0.0,
                     MissingValuePolicy::ForwardFill => last_values[idx].unwrap_or(0.0),
@@ -241,10 +312,27 @@ pub fn load_json_with_policy(
     path: &Path,
     policy: MissingValuePolicy,
 ) -> Result<(Vec<SentimentPoint>, SentimentReport), String> {
-    let file = File::open(path)
-        .map_err(|err| format!("failed to open sentiment JSON {}: {}", path.display(), err))?;
-    let records: Vec<SentimentJsonRecord> = serde_json::from_reader(file)
-        .map_err(|err| format!("failed to parse sentiment JSON: {}", err))?;
+    let policy_label_value = policy_label(policy);
+    let file = File::open(path).map_err(|err| {
+        metrics::counter!(
+            "kairos.infra.sentiment.load.errors_total",
+            "format" => "json",
+            "policy" => policy_label_value,
+            "stage" => "open"
+        )
+        .increment(1);
+        format!("failed to open sentiment JSON {}: {}", path.display(), err)
+    })?;
+    let records: Vec<SentimentJsonRecord> = serde_json::from_reader(file).map_err(|err| {
+        metrics::counter!(
+            "kairos.infra.sentiment.load.errors_total",
+            "format" => "json",
+            "policy" => policy_label_value,
+            "stage" => "parse_json"
+        )
+        .increment(1);
+        format!("failed to parse sentiment JSON: {}", err)
+    })?;
 
     let mut raw_by_ts: BTreeMap<i64, BTreeMap<String, Option<f64>>> = BTreeMap::new();
     let mut schema_set: BTreeMap<String, ()> = BTreeMap::new();
@@ -252,7 +340,15 @@ pub fn load_json_with_policy(
     let mut last_ts: Option<i64> = None;
 
     for record in records {
-        let timestamp = parse_timestamp(&record.timestamp_utc)?;
+        let timestamp = parse_timestamp(&record.timestamp_utc).inspect_err(|_err| {
+            metrics::counter!(
+                "kairos.infra.sentiment.load.errors_total",
+                "format" => "json",
+                "policy" => policy_label_value,
+                "stage" => "timestamp"
+            )
+            .increment(1);
+        })?;
 
         if report.first_timestamp.is_none() {
             report.first_timestamp = Some(timestamp);
@@ -280,6 +376,13 @@ pub fn load_json_with_policy(
                     } else {
                         report.invalid_values += 1;
                         if matches!(policy, MissingValuePolicy::Error) {
+                            metrics::counter!(
+                                "kairos.infra.sentiment.load.errors_total",
+                                "format" => "json",
+                                "policy" => policy_label_value,
+                                "stage" => "invalid_value"
+                            )
+                            .increment(1);
                             return Err(format!(
                                 "invalid sentiment json value for key '{}' at ts={}",
                                 key, timestamp
@@ -319,10 +422,17 @@ pub fn load_json_with_policy(
                 }
                 None => match policy {
                     MissingValuePolicy::Error => {
+                        metrics::counter!(
+                            "kairos.infra.sentiment.load.errors_total",
+                            "format" => "json",
+                            "policy" => policy_label_value,
+                            "stage" => "missing_value"
+                        )
+                        .increment(1);
                         return Err(format!(
                             "missing sentiment value for key '{}' at ts={}",
                             key, timestamp
-                        ))
+                        ));
                     }
                     MissingValuePolicy::ZeroFill => 0.0,
                     MissingValuePolicy::ForwardFill => last_values[idx].unwrap_or(0.0),

@@ -58,7 +58,13 @@ pub fn load_postgres(
     );
     let _enter = span.enter();
 
-    validate_table_name(table)?;
+    if let Err(err) = validate_table_name(table) {
+        metrics::counter!("kairos.infra.postgres.load_ohlcv.calls", "result" => "err").increment(1);
+        metrics::counter!("kairos.infra.postgres.load_ohlcv.errors", "stage" => "validate_table")
+            .increment(1);
+        tracing::warn!(error = %err, "invalid table name");
+        return Err(err);
+    }
 
     let connect_start = Instant::now();
     let mut client = match Client::connect(db_url, NoTls) {
@@ -68,11 +74,12 @@ pub fn load_postgres(
                 .increment(1);
             metrics::counter!("kairos.infra.postgres.load_ohlcv.errors", "stage" => "connect")
                 .increment(1);
+            tracing::error!(error = %err, "failed to connect to postgres");
             return Err(format!("failed to connect to postgres: {err}"));
         }
     };
     metrics::histogram!("kairos.infra.postgres.connect_ms")
-        .record(connect_start.elapsed().as_millis() as f64);
+        .record(connect_start.elapsed().as_secs_f64() * 1000.0);
 
     let query = format!(
         "SELECT timestamp_utc, open, high, low, close, volume FROM {} \
@@ -88,11 +95,14 @@ pub fn load_postgres(
                 .increment(1);
             metrics::counter!("kairos.infra.postgres.load_ohlcv.errors", "stage" => "query")
                 .increment(1);
+            tracing::error!(error = %err, "failed to query OHLCV");
             return Err(format!("failed to query OHLCV: {err}"));
         }
     };
     metrics::histogram!("kairos.infra.postgres.query_ms")
-        .record(query_start.elapsed().as_millis() as f64);
+        .record(query_start.elapsed().as_secs_f64() * 1000.0);
+
+    let rows_len = rows.len();
 
     let mut bars = Vec::with_capacity(rows.len());
     let mut report = DataQualityReport::default();
@@ -156,14 +166,20 @@ pub fn load_postgres(
 
     metrics::counter!("kairos.infra.postgres.load_ohlcv.calls", "result" => "ok").increment(1);
     metrics::histogram!("kairos.infra.postgres.load_ohlcv_ms")
-        .record(overall_start.elapsed().as_millis() as f64);
+        .record(overall_start.elapsed().as_secs_f64() * 1000.0);
+    metrics::gauge!("kairos.infra.postgres.load_ohlcv.rows_returned").set(rows_len as f64);
+    metrics::counter!("kairos.infra.postgres.load_ohlcv.rows_returned_total")
+        .increment(rows_len as u64);
     metrics::gauge!("kairos.infra.postgres.load_ohlcv.bars_loaded").set(bars.len() as f64);
+    metrics::counter!("kairos.infra.postgres.load_ohlcv.bars_loaded_total")
+        .increment(bars.len() as u64);
     metrics::gauge!("kairos.infra.postgres.load_ohlcv.invalid_close")
         .set(report.invalid_close as f64);
     metrics::gauge!("kairos.infra.postgres.load_ohlcv.duplicates").set(report.duplicates as f64);
     metrics::gauge!("kairos.infra.postgres.load_ohlcv.gaps").set(report.gaps as f64);
 
     tracing::debug!(
+        rows = rows_len,
         bars = bars.len(),
         invalid_close = report.invalid_close,
         duplicates = report.duplicates,

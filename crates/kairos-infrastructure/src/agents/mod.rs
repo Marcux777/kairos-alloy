@@ -93,6 +93,7 @@ impl AgentClient {
         let mut attempts = 0u32;
         let mut last_status: Option<u16> = None;
         let mut last_error: Option<String> = None;
+        let mut last_error_kind: Option<&'static str> = None;
 
         while attempts <= self.retries {
             attempts += 1;
@@ -120,12 +121,14 @@ impl AgentClient {
                         match resp.json::<ActionResponse>() {
                             Ok(parsed) => match validate_action_response(&parsed) {
                                 Ok(()) => {
+                                    let duration_ms = start.elapsed().as_millis() as u64;
                                     metrics::histogram!(
                                         "kairos.infra.agent.call_ms",
                                         "endpoint" => "act",
-                                        "result" => "ok"
+                                        "result" => "ok",
+                                        "status" => last_status.unwrap_or(200).to_string()
                                     )
-                                    .record(start.elapsed().as_millis() as f64);
+                                    .record(duration_ms as f64);
                                     metrics::histogram!(
                                         "kairos.infra.agent.attempts",
                                         "endpoint" => "act"
@@ -135,7 +138,7 @@ impl AgentClient {
                                     return AgentCallResult {
                                         info: AgentCallInfo {
                                             attempts,
-                                            duration_ms: start.elapsed().as_millis() as u64,
+                                            duration_ms,
                                             status: last_status,
                                             error: None,
                                         },
@@ -144,11 +147,13 @@ impl AgentClient {
                                 }
                                 Err(err) => {
                                     last_error = Some(err);
+                                    last_error_kind = Some("validate");
                                     break;
                                 }
                             },
                             Err(err) => {
                                 last_error = Some(format!("failed to parse agent response: {err}"));
+                                last_error_kind = Some("decode");
                                 break;
                             }
                         }
@@ -161,6 +166,7 @@ impl AgentClient {
                         "agent http error: status {}",
                         resp.status().as_u16()
                     ));
+                    last_error_kind = Some("http_status");
                     break;
                 }
                 Err(err) => {
@@ -171,6 +177,7 @@ impl AgentClient {
                     )
                     .record(attempt_start.elapsed().as_millis() as f64);
                     last_error = Some(format!("agent request failed: {err}"));
+                    last_error_kind = Some("transport");
                     if attempts <= self.retries {
                         continue;
                     }
@@ -179,13 +186,26 @@ impl AgentClient {
             }
         }
 
-        metrics::counter!("kairos.infra.agent.errors_total", "endpoint" => "act").increment(1);
+        let duration_ms = start.elapsed().as_millis() as u64;
+        let status_label = last_status
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "none".to_string());
+        let kind = last_error_kind.unwrap_or("unknown");
+        metrics::counter!(
+            "kairos.infra.agent.errors_total",
+            "endpoint" => "act",
+            "kind" => kind,
+            "status" => status_label.clone()
+        )
+        .increment(1);
         metrics::histogram!(
             "kairos.infra.agent.call_ms",
             "endpoint" => "act",
-            "result" => "err"
+            "result" => "err",
+            "status" => status_label,
+            "error_kind" => kind
         )
-        .record(start.elapsed().as_millis() as f64);
+        .record(duration_ms as f64);
         metrics::histogram!("kairos.infra.agent.attempts", "endpoint" => "act")
             .record(attempts as f64);
         tracing::warn!(
@@ -198,7 +218,7 @@ impl AgentClient {
         AgentCallResult {
             info: AgentCallInfo {
                 attempts,
-                duration_ms: start.elapsed().as_millis() as u64,
+                duration_ms,
                 status: last_status,
                 error: last_error
                     .or_else(|| Some("agent request failed after retries".to_string())),
@@ -248,6 +268,7 @@ impl AgentClient {
         let mut attempts = 0u32;
         let mut last_status: Option<u16> = None;
         let mut last_error: Option<String> = None;
+        let mut last_error_kind: Option<&'static str> = None;
 
         while attempts <= self.retries {
             attempts += 1;
@@ -280,21 +301,25 @@ impl AgentClient {
                                         batch.items.len(),
                                         parsed.items.len()
                                     ));
+                                    last_error_kind = Some("batch_size_mismatch");
                                     break;
                                 }
                                 for item in &parsed.items {
                                     if let Err(err) = validate_action_response(item) {
                                         last_error = Some(err);
+                                        last_error_kind = Some("validate");
                                         break;
                                     }
                                 }
                                 if last_error.is_none() {
+                                    let duration_ms = start.elapsed().as_millis() as u64;
                                     metrics::histogram!(
                                         "kairos.infra.agent.call_ms",
                                         "endpoint" => "act_batch",
-                                        "result" => "ok"
+                                        "result" => "ok",
+                                        "status" => last_status.unwrap_or(200).to_string()
                                     )
-                                    .record(start.elapsed().as_millis() as f64);
+                                    .record(duration_ms as f64);
                                     metrics::histogram!(
                                         "kairos.infra.agent.attempts",
                                         "endpoint" => "act_batch"
@@ -304,7 +329,7 @@ impl AgentClient {
                                     return AgentBatchCallResult {
                                         info: AgentCallInfo {
                                             attempts,
-                                            duration_ms: start.elapsed().as_millis() as u64,
+                                            duration_ms,
                                             status: last_status,
                                             error: None,
                                         },
@@ -316,6 +341,7 @@ impl AgentClient {
                             Err(err) => {
                                 last_error =
                                     Some(format!("failed to parse agent batch response: {err}"));
+                                last_error_kind = Some("decode");
                                 break;
                             }
                         }
@@ -328,6 +354,7 @@ impl AgentClient {
                         "agent http error: status {}",
                         resp.status().as_u16()
                     ));
+                    last_error_kind = Some("http_status");
                     break;
                 }
                 Err(err) => {
@@ -339,6 +366,7 @@ impl AgentClient {
                     .record(attempt_start.elapsed().as_millis() as f64);
 
                     last_error = Some(format!("agent request failed: {err}"));
+                    last_error_kind = Some("transport");
                     if attempts <= self.retries {
                         continue;
                     }
@@ -347,14 +375,26 @@ impl AgentClient {
             }
         }
 
-        metrics::counter!("kairos.infra.agent.errors_total", "endpoint" => "act_batch")
-            .increment(1);
+        let duration_ms = start.elapsed().as_millis() as u64;
+        let status_label = last_status
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "none".to_string());
+        let kind = last_error_kind.unwrap_or("unknown");
+        metrics::counter!(
+            "kairos.infra.agent.errors_total",
+            "endpoint" => "act_batch",
+            "kind" => kind,
+            "status" => status_label.clone()
+        )
+        .increment(1);
         metrics::histogram!(
             "kairos.infra.agent.call_ms",
             "endpoint" => "act_batch",
-            "result" => "err"
+            "result" => "err",
+            "status" => status_label,
+            "error_kind" => kind
         )
-        .record(start.elapsed().as_millis() as f64);
+        .record(duration_ms as f64);
         metrics::histogram!("kairos.infra.agent.attempts", "endpoint" => "act_batch")
             .record(attempts as f64);
         tracing::warn!(
@@ -367,7 +407,7 @@ impl AgentClient {
         AgentBatchCallResult {
             info: AgentCallInfo {
                 attempts,
-                duration_ms: start.elapsed().as_millis() as u64,
+                duration_ms,
                 status: last_status,
                 error: last_error
                     .or_else(|| Some("agent request failed after retries".to_string())),

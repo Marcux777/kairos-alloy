@@ -161,6 +161,9 @@ Logs (por padrão: `info`, formato `pretty`):
 Métricas (Prometheus):
 
 - `--metrics-addr 127.0.0.1:9898` habilita um endpoint HTTP em `/metrics`
+- Métricas infra (principais):
+  - Postgres OHLCV: `kairos.infra.postgres.load_ohlcv_ms`, `kairos.infra.postgres.connect_ms`, `kairos.infra.postgres.query_ms`, `kairos.infra.postgres.load_ohlcv.rows_returned`, `kairos.infra.postgres.load_ohlcv.bars_loaded`, `kairos.infra.postgres.load_ohlcv.errors`
+  - Sentimento (CSV/JSON): `kairos.infra.sentiment.load_ms`, `kairos.infra.sentiment.points_loaded`, `kairos.infra.sentiment.load.errors_total` (labels `format`/`policy`/`stage`)
 
 ## Ingestao OHLCV (PostgreSQL)
 
