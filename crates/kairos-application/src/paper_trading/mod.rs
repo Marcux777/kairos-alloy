@@ -23,6 +23,7 @@ use kairos_domain::services::strategy::{
 use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
+use tracing::info_span;
 
 pub fn run_paper(
     config: &Config,
@@ -33,6 +34,14 @@ pub fn run_paper(
     artifacts: &dyn ArtifactWriter,
     remote_agent: Option<Box<dyn AgentPort>>,
 ) -> Result<PathBuf, String> {
+    let _span = info_span!(
+        "run_paper",
+        run_id = %config.run.run_id,
+        symbol = %config.run.symbol,
+        timeframe = %config.run.timeframe
+    )
+    .entered();
+
     let mut audit_extras: Vec<AuditEvent> = Vec::new();
 
     let expected_step = parse_duration_like(&config.run.timeframe)?;
@@ -54,6 +63,8 @@ pub fn run_paper(
         timeframe: source_timeframe_label.clone(),
         expected_step_seconds: Some(source_step),
     })?;
+    metrics::histogram!("kairos.paper.load_ohlcv_ms")
+        .record(stage_start.elapsed().as_millis() as f64);
 
     let (bars, data_report, resampled) = if source_timeframe_label != timeframe_label {
         if source_step > expected_step {
@@ -66,6 +77,8 @@ pub fn run_paper(
         let resample_start = Instant::now();
         let resampled_bars = resample_bars(&source_bars, expected_step)?;
         let report = data_quality_from_bars(&resampled_bars, Some(expected_step));
+        metrics::histogram!("kairos.paper.resample_ms")
+            .record(resample_start.elapsed().as_millis() as f64);
         audit_extras.push(timing_event(
             &config.run.run_id,
             0,
@@ -121,6 +134,8 @@ pub fn run_paper(
             format,
             missing_policy,
         })?;
+        metrics::histogram!("kairos.paper.load_sentiment_ms")
+            .record(stage_start.elapsed().as_millis() as f64);
 
         audit_extras.push(timing_event(
             &config.run.run_id,
@@ -152,6 +167,8 @@ pub fn run_paper(
         .as_ref()
         .map(|points| sentiment::align_with_bars(&bar_timestamps, points, sentiment_lag))
         .unwrap_or_else(|| vec![None; bars.len()]);
+    metrics::histogram!("kairos.paper.align_sentiment_ms")
+        .record(stage_start.elapsed().as_millis() as f64);
     audit_extras.push(timing_event(
         &config.run.run_id,
         0,
@@ -251,6 +268,10 @@ pub fn run_paper(
         execution.clone(),
     );
     let results = runner.run();
+    let engine_ms = stage_start.elapsed().as_millis() as f64;
+    metrics::histogram!("kairos.paper.engine_ms").record(engine_ms);
+    metrics::gauge!("kairos.paper.bars_processed").set(results.summary.bars_processed as f64);
+    metrics::gauge!("kairos.paper.trades").set(results.summary.trades as f64);
     audit_extras.push(timing_event(
         &config.run.run_id,
         0,
@@ -341,6 +362,13 @@ fn write_outputs(
             run_dir.join("summary.html").as_path(),
             &results.summary,
             meta.as_ref(),
+        )?;
+        artifacts.write_dashboard_html(
+            run_dir.join("dashboard.html").as_path(),
+            &results.summary,
+            meta.as_ref(),
+            &results.trades,
+            &results.equity,
         )?;
     }
 

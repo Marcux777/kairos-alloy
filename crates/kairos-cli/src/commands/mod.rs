@@ -17,6 +17,7 @@ pub enum Command {
         step_seconds: i64,
         mode: String,
         json: bool,
+        profile_svg: Option<PathBuf>,
     },
     Paper {
         config: PathBuf,
@@ -40,7 +41,8 @@ pub fn run(command: Command) -> Result<(), String> {
             step_seconds,
             mode,
             json,
-        } => bench::run_bench(bars, step_seconds, mode, json),
+            profile_svg,
+        } => bench::run_bench(bars, step_seconds, mode, json, profile_svg),
         Command::Paper { config, out } => paper::run_paper(config, out),
         Command::Validate {
             config,

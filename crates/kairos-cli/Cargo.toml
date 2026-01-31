@@ -19,7 +19,17 @@ clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.16", optional = true }
+pprof = { version = "0.14", optional = true, features = ["flamegraph"] }
 
 [dev-dependencies]
 kairos-ingest = { path = "../kairos-ingest", version = "0.1.0" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[features]
+default = ["prometheus", "pprof"]
+prometheus = ["dep:metrics-exporter-prometheus"]
+pprof = ["dep:pprof"]

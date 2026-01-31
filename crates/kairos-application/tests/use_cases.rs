@@ -43,6 +43,7 @@ struct RecordingWriter {
     equity_written: RefCell<Option<usize>>,
     summary_written: RefCell<Option<serde_json::Value>>,
     summary_html_written: RefCell<bool>,
+    dashboard_html_written: RefCell<bool>,
     audit_written: RefCell<Option<usize>>,
     config_snapshot: RefCell<Option<String>>,
 }
@@ -93,6 +94,18 @@ impl ArtifactWriter for RecordingWriter {
         _meta: Option<&serde_json::Value>,
     ) -> Result<(), String> {
         *self.summary_html_written.borrow_mut() = true;
+        Ok(())
+    }
+
+    fn write_dashboard_html(
+        &self,
+        _path: &Path,
+        _summary: &kairos_domain::entities::metrics::MetricsSummary,
+        _meta: Option<&serde_json::Value>,
+        _trades: &[Trade],
+        _equity: &[EquityPoint],
+    ) -> Result<(), String> {
+        *self.dashboard_html_written.borrow_mut() = true;
         Ok(())
     }
 

@@ -61,6 +61,18 @@ impl ArtifactWriter for FilesystemArtifactWriter {
         reporting::write_summary_html(path, summary, parsed.as_ref())
     }
 
+    fn write_dashboard_html(
+        &self,
+        path: &Path,
+        summary: &MetricsSummary,
+        meta: Option<&serde_json::Value>,
+        trades: &[Trade],
+        equity: &[EquityPoint],
+    ) -> Result<(), String> {
+        let parsed = meta.and_then(parse_summary_meta);
+        reporting::write_dashboard_html(path, summary, parsed.as_ref(), trades, equity)
+    }
+
     fn write_audit_jsonl(&self, path: &Path, events: &[AuditEvent]) -> Result<(), String> {
         reporting::write_audit_jsonl(path, events)
     }

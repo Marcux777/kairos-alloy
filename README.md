@@ -63,6 +63,7 @@ O run escreve em `runs/<run_id>/` (ex.: `runs/quickstart_btc_usdt_1min/`):
 - `logs.jsonl`
 - `config_snapshot.toml`
 - `summary.html` (quando `report.html=true`)
+- `dashboard.html` (quando `report.html=true`)
 
 ## CLI (MVP): comandos e exemplos
 
@@ -140,6 +141,26 @@ Rodar benchmark sintético de 500k barras em `--release` (mede throughput do eng
 ```bash
 cargo run -p kairos-cli --release -- bench --bars 500000 --mode features --json
 ```
+
+### Profiling (CPU flamegraph)
+
+Para gerar um flamegraph SVG do benchmark:
+
+```bash
+cargo run -p kairos-cli --release -- bench --bars 500000 --mode features --profile-svg runs/flamegraph.svg
+```
+
+## Observabilidade (logs + métricas)
+
+Logs (por padrão: `info`, formato `pretty`):
+
+- `--log-level`: filtro do `tracing_subscriber::EnvFilter` (ex.: `debug`, `info`, `warn`)
+- `--log-format`: `pretty` ou `json`
+- `KAIROS_LOG`: override completo do filtro (ex.: `KAIROS_LOG=debug,kairos_application=trace`)
+
+Métricas (Prometheus):
+
+- `--metrics-addr 127.0.0.1:9898` habilita um endpoint HTTP em `/metrics`
 
 ## Ingestao OHLCV (PostgreSQL)
 

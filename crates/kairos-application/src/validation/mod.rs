@@ -8,6 +8,8 @@ use kairos_domain::repositories::sentiment::{
 };
 use kairos_domain::services::ohlcv::{data_quality_from_bars, resample_bars, DataQualityReport};
 use std::path::PathBuf;
+use std::time::Instant;
+use tracing::info_span;
 
 pub fn validate(
     config: &Config,
@@ -15,6 +17,16 @@ pub fn validate(
     market_data: &dyn MarketDataRepository,
     sentiment_repo: &dyn SentimentRepository,
 ) -> Result<serde_json::Value, String> {
+    let _span = info_span!(
+        "validate",
+        strict = strict,
+        run_id = %config.run.run_id,
+        symbol = %config.run.symbol,
+        timeframe = %config.run.timeframe
+    )
+    .entered();
+
+    let stage_start = Instant::now();
     let expected_step = parse_duration_like(&config.run.timeframe)?;
     let timeframe_label = normalize_timeframe_label(&config.run.timeframe)?;
     let source_timeframe_label = normalize_timeframe_label(
@@ -34,6 +46,8 @@ pub fn validate(
         expected_step_seconds: Some(source_step),
     })?;
     let source_rows = source_bars.len();
+    metrics::histogram!("kairos.validate.load_ohlcv_ms")
+        .record(stage_start.elapsed().as_millis() as f64);
 
     let (ohlcv_report, ohlcv_source_report_json, effective_rows, resampled) =
         if source_timeframe_label != timeframe_label {
@@ -108,6 +122,14 @@ pub fn validate(
     {
         return Err("strict validation failed: data quality limits exceeded".to_string());
     }
+
+    metrics::gauge!("kairos.validate.ohlcv.gaps").set(ohlcv_report.gaps as f64);
+    metrics::gauge!("kairos.validate.ohlcv.duplicates").set(ohlcv_report.duplicates as f64);
+    metrics::gauge!("kairos.validate.ohlcv.out_of_order").set(ohlcv_report.out_of_order as f64);
+    metrics::gauge!("kairos.validate.ohlcv.invalid_close").set(ohlcv_report.invalid_close as f64);
+    metrics::gauge!("kairos.validate.sentiment.missing").set(s_missing as f64);
+    metrics::gauge!("kairos.validate.sentiment.invalid").set(s_invalid as f64);
+    metrics::gauge!("kairos.validate.sentiment.dropped").set(s_dropped as f64);
 
     Ok(serde_json::json!({
         "ohlcv_resample": if resampled { serde_json::json!({

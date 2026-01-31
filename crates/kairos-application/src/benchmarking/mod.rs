@@ -5,6 +5,7 @@ use kairos_domain::services::features;
 use kairos_domain::services::market_data_source::VecBarSource;
 use kairos_domain::services::strategy::BuyAndHold;
 use std::time::Instant;
+use tracing::info_span;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BenchMode {
@@ -22,6 +23,14 @@ pub struct BenchSummary {
 }
 
 pub fn run_bench(bars: usize, step_seconds: i64, mode: &str) -> Result<BenchSummary, String> {
+    let _span = info_span!(
+        "run_bench",
+        bars = bars,
+        step_seconds = step_seconds,
+        mode = mode
+    )
+    .entered();
+
     if bars == 0 {
         return Err("bars must be > 0".to_string());
     }
@@ -149,6 +158,10 @@ pub fn run_bench(bars: usize, step_seconds: i64, mode: &str) -> Result<BenchSumm
     } else {
         0.0
     };
+
+    metrics::histogram!("kairos.bench.engine_ms", "mode" => mode.to_string())
+        .record(elapsed_ms as f64);
+    metrics::gauge!("kairos.bench.bars_per_sec", "mode" => mode.to_string()).set(bars_per_sec);
 
     Ok(BenchSummary {
         mode: bench_mode,
