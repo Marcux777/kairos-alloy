@@ -125,11 +125,9 @@ pub fn load_postgres(
 
     let rows_len = rows.len();
 
-    let mut bars = Vec::with_capacity(rows.len());
+    let mut bars_raw = Vec::with_capacity(rows.len());
     let mut report = DataQualityReport::default();
-    let mut last_ts: Option<i64> = None;
-    let mut max_gap: Option<i64> = None;
-    let step = expected_step_seconds.unwrap_or(1);
+    let mut last_seen_ts: Option<i64> = None;
 
     for row in rows {
         let timestamp: DateTime<Utc> = row.get(0);
@@ -142,37 +140,18 @@ pub fn load_postgres(
             }
             continue;
         }
-        if report.first_timestamp.is_none() {
-            report.first_timestamp = Some(ts);
-        }
 
-        if let Some(prev) = last_ts {
-            if ts == prev {
-                report.duplicates += 1;
-                if report.first_duplicate.is_none() {
-                    report.first_duplicate = Some(ts);
-                }
-            } else if ts < prev {
+        if let Some(prev) = last_seen_ts {
+            if ts < prev {
                 report.out_of_order += 1;
                 if report.first_out_of_order.is_none() {
                     report.first_out_of_order = Some(ts);
                 }
-            } else if ts > prev {
-                let diff = ts - prev;
-                if diff > step {
-                    report.gaps += 1;
-                    report.gap_count += 1;
-                    if report.first_gap.is_none() {
-                        report.first_gap = Some(ts);
-                    }
-                    max_gap = Some(max_gap.map_or(diff, |current| current.max(diff)));
-                }
             }
         }
 
-        last_ts = Some(ts);
-        report.last_timestamp = Some(ts);
-        bars.push(Bar {
+        last_seen_ts = Some(ts);
+        bars_raw.push(Bar {
             symbol: symbol.to_string(),
             timestamp: ts,
             open: row.get(1),
@@ -183,7 +162,34 @@ pub fn load_postgres(
         });
     }
 
-    report.max_gap_seconds = max_gap;
+    if bars_raw.is_empty() {
+        metrics::counter!("kairos.infra.postgres.load_ohlcv.calls_total", "result" => "ok")
+            .increment(1);
+        metrics::histogram!("kairos.infra.postgres.load_ohlcv_ms")
+            .record(overall_start.elapsed().as_secs_f64() * 1000.0);
+        metrics::gauge!("kairos.infra.postgres.load_ohlcv.rows_returned").set(rows_len as f64);
+        metrics::counter!("kairos.infra.postgres.load_ohlcv.rows_returned_total")
+            .increment(rows_len as u64);
+        metrics::gauge!("kairos.infra.postgres.load_ohlcv.bars_loaded").set(0.0);
+        metrics::counter!("kairos.infra.postgres.load_ohlcv.bars_loaded_total").increment(0u64);
+        metrics::gauge!("kairos.infra.postgres.load_ohlcv.invalid_close")
+            .set(report.invalid_close as f64);
+        metrics::gauge!("kairos.infra.postgres.load_ohlcv.duplicates").set(0.0);
+        metrics::gauge!("kairos.infra.postgres.load_ohlcv.gaps").set(0.0);
+
+        tracing::debug!(
+            rows = rows_len,
+            bars = 0,
+            invalid_close = report.invalid_close,
+            duplicates = report.duplicates,
+            gaps = report.gaps,
+            out_of_order = report.out_of_order,
+            "loaded OHLCV"
+        );
+        return Ok((Vec::new(), report));
+    }
+
+    let bars = canonicalize_bars(bars_raw, expected_step_seconds, &mut report);
 
     metrics::counter!("kairos.infra.postgres.load_ohlcv.calls_total", "result" => "ok")
         .increment(1);
@@ -210,6 +216,63 @@ pub fn load_postgres(
         "loaded OHLCV"
     );
     Ok((bars, report))
+}
+
+fn canonicalize_bars(
+    mut bars_raw: Vec<Bar>,
+    expected_step_seconds: Option<i64>,
+    report: &mut DataQualityReport,
+) -> Vec<Bar> {
+    report.duplicates = 0;
+    report.gaps = 0;
+    report.gap_count = 0;
+    report.first_timestamp = None;
+    report.last_timestamp = None;
+    report.first_gap = None;
+    report.first_duplicate = None;
+    report.max_gap_seconds = None;
+
+    bars_raw.sort_by_key(|bar| bar.timestamp);
+
+    let mut bars: Vec<Bar> = Vec::with_capacity(bars_raw.len());
+    for bar in bars_raw {
+        if let Some(last) = bars.last_mut() {
+            if bar.timestamp == last.timestamp {
+                report.duplicates += 1;
+                if report.first_duplicate.is_none() {
+                    report.first_duplicate = Some(bar.timestamp);
+                }
+                *last = bar;
+                continue;
+            }
+        }
+        bars.push(bar);
+    }
+
+    report.first_timestamp = bars.first().map(|b| b.timestamp);
+    report.last_timestamp = bars.last().map(|b| b.timestamp);
+
+    let step = expected_step_seconds.unwrap_or(1).max(1);
+    let mut max_gap: Option<i64> = None;
+    let mut last_unique_ts: Option<i64> = None;
+    for bar in &bars {
+        let ts = bar.timestamp;
+        if let Some(prev) = last_unique_ts {
+            let diff = ts - prev;
+            if diff > step {
+                report.gaps += 1;
+                report.gap_count += ((diff - 1) / step) as usize;
+                if report.first_gap.is_none() {
+                    report.first_gap = Some(ts);
+                }
+                max_gap = Some(max_gap.map_or(diff, |current| current.max(diff)));
+            }
+        }
+        last_unique_ts = Some(ts);
+    }
+    report.max_gap_seconds = max_gap;
+
+    bars
 }
 
 fn validate_table_name(table: &str) -> Result<(), String> {
@@ -241,7 +304,9 @@ fn validate_table_name(table: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_postgres, validate_table_name};
+    use super::{canonicalize_bars, load_postgres, validate_table_name};
+    use kairos_domain::services::ohlcv::DataQualityReport;
+    use kairos_domain::value_objects::bar::Bar;
     use postgres::NoTls;
     use r2d2::Pool;
     use r2d2_postgres::PostgresConnectionManager;
@@ -271,6 +336,48 @@ mod tests {
         )
         .expect_err("invalid db url should fail fast");
         assert!(err.contains("invalid postgres db url"));
+    }
+
+    #[test]
+    fn canonicalize_bars_dedupes_keeps_last_and_counts_missing_bars() {
+        let mut report = DataQualityReport::default();
+        let raw = vec![
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 0,
+                open: 1.0,
+                high: 1.0,
+                low: 1.0,
+                close: 1.0,
+                volume: 1.0,
+            },
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 0,
+                open: 2.0,
+                high: 2.0,
+                low: 2.0,
+                close: 2.0,
+                volume: 2.0,
+            },
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 300,
+                open: 3.0,
+                high: 3.0,
+                low: 3.0,
+                close: 3.0,
+                volume: 3.0,
+            },
+        ];
+
+        let bars = canonicalize_bars(raw, Some(60), &mut report);
+        assert_eq!(bars.len(), 2);
+        assert_eq!(report.duplicates, 1);
+        assert_eq!(bars[0].timestamp, 0);
+        assert!((bars[0].close - 2.0).abs() < 1e-9);
+        assert_eq!(report.gaps, 1);
+        assert_eq!(report.gap_count, 4);
     }
 
     fn build_pool(db_url: &str) -> Pool<PostgresConnectionManager<NoTls>> {

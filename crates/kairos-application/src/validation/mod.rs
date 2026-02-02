@@ -102,6 +102,7 @@ pub fn validate(
 
     let limits = config.data_quality.as_ref();
     let max_gaps = limits.and_then(|l| l.max_gaps).unwrap_or(0);
+    let max_missing_bars = limits.and_then(|l| l.max_missing_bars).unwrap_or(0);
     let max_duplicates = limits.and_then(|l| l.max_duplicates).unwrap_or(0);
     let max_out_of_order = limits.and_then(|l| l.max_out_of_order).unwrap_or(0);
     let max_invalid_close = limits.and_then(|l| l.max_invalid_close).unwrap_or(0);
@@ -111,6 +112,7 @@ pub fn validate(
 
     if strict
         && (ohlcv_report.gaps > max_gaps
+            || ohlcv_report.gap_count > max_missing_bars
             || ohlcv_report.duplicates > max_duplicates
             || ohlcv_report.out_of_order > max_out_of_order
             || ohlcv_report.invalid_close > max_invalid_close
@@ -152,6 +154,7 @@ pub fn validate(
         },
         "limits": {
             "max_gaps": max_gaps,
+            "max_missing_bars": max_missing_bars,
             "max_duplicates": max_duplicates,
             "max_out_of_order": max_out_of_order,
             "max_invalid_close": max_invalid_close,
@@ -168,6 +171,7 @@ fn data_quality_json(report: &DataQualityReport, rows: usize) -> serde_json::Val
         "rows": rows,
         "duplicates": report.duplicates,
         "gaps": report.gaps,
+        "missing_bars": report.gap_count,
         "out_of_order": report.out_of_order,
         "invalid_close": report.invalid_close,
         "first_timestamp": report.first_timestamp,

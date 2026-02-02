@@ -5,7 +5,7 @@ This document defines the **target architecture** for Kairos Alloy and a **decis
 ## Goals
 - Keep domain rules deterministic, testable, and independent of IO.
 - Make data sources and integrations replaceable via ports (traits).
-- Preserve the existing CLI UX (`kairos-alloy backtest|paper|validate|report|bench`) while refactoring internals.
+- Preserve the TUI UX (menu-driven `kairos-alloy`) while refactoring internals.
 - Improve testability: unit tests run without Postgres/HTTP; integration tests cover real adapters.
 
 ## Non-goals (for now)
@@ -18,7 +18,7 @@ Historically, the MVP used a single “core” crate that mixed:
 - domain logic (engine/portfolio/risk/metrics/strategy/types)
 - IO concerns (Postgres OHLCV loader, filesystem sentiment loader, HTTP agent client)
 
-**Status:** the workspace has since been split into `kairos-domain`, `kairos-infrastructure`, and `kairos-application`, and the old `kairos-core` crate has been removed. The CLI now acts as a thin composition root and delegates orchestration to `kairos-application` for backtest/paper/validate/report/bench.
+**Status:** the workspace has since been split into `kairos-domain`, `kairos-infrastructure`, and `kairos-application`, and the old `kairos-core` crate has been removed. The TUI is the user-facing interface and the `kairos-alloy` binary is built from the `kairos-tui` crate.
 
 ## Target workspace layout
 
@@ -27,13 +27,13 @@ crates/
   kairos-domain/           # pure domain (no IO)
   kairos-application/      # use cases / orchestration
   kairos-infrastructure/   # adapters (Postgres/filesystem/HTTP)
-  kairos-cli/              # CLI interface (user-facing)
+  kairos-tui/              # TUI interface (user-facing)
   kairos-ingest/           # ingestion tool (kept as tool crate)
 ```
 
 ### Dependency rules (strict)
 ```
-kairos-cli  -> kairos-application -> kairos-domain
+kairos-tui  -> kairos-application -> kairos-domain
 kairos-infrastructure -----------> kairos-domain
 kairos-ingest -> kairos-infrastructure (optional) OR -> its own adapters
 ```
@@ -213,7 +213,7 @@ Acceptance criteria:
 
 ### Phase 2 — Introduce application use cases
 1. Implement `RunBacktest` and `ValidateData` in `kairos-application`.
-2. Update `kairos-cli` to call application use cases instead of orchestrating directly.
+2. Update `kairos-tui` to call application use cases instead of orchestrating directly.
 
 Acceptance criteria:
 - CLI behavior unchanged (golden files / integration tests remain green).

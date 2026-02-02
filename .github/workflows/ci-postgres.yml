@@ -44,4 +44,4 @@ jobs:
 
       - name: Test (prd20 integration)
         shell: bash
-        run: cargo test -p kairos-cli --test prd20_integration --locked
+        run: cargo test -p kairos-application --test prd20_integration --locked

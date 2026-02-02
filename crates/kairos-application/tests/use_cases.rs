@@ -203,6 +203,7 @@ fn minimal_config() -> Config {
         metrics: None,
         data_quality: Some(kairos_application::config::DataQualityConfig {
             max_gaps: Some(0),
+            max_missing_bars: Some(0),
             max_duplicates: Some(0),
             max_out_of_order: Some(0),
             max_invalid_close: Some(0),
@@ -322,6 +323,23 @@ fn validate_strict_fails_when_limits_exceeded() {
         bars: Vec::new(),
         report: DataQualityReport {
             gaps: 1,
+            ..DataQualityReport::default()
+        },
+    };
+    let sentiment = FakeSentimentRepo;
+
+    let err = kairos_application::validation::validate(&config, true, &market, &sentiment)
+        .expect_err("strict should fail");
+    assert!(err.contains("strict validation failed"));
+}
+
+#[test]
+fn validate_strict_fails_when_missing_bars_exceeded() {
+    let config = minimal_config();
+    let market = FakeMarketDataRepo {
+        bars: Vec::new(),
+        report: DataQualityReport {
+            gap_count: 1,
             ..DataQualityReport::default()
         },
     };

@@ -50,7 +50,7 @@ Esperado: o comando de ingestao termina sem erro e passa a existir OHLCV para o 
 
 ```bash
 python3 tools/agent-dummy/agent_dummy.py --host 127.0.0.1 --port 8000 --mode tiny_buy &
-cargo run -p kairos-cli -- backtest --config configs/quickstart.toml --out runs/
+cargo run -p kairos-tui --
 ```
 
 ### 5) Ver os artefatos gerados
@@ -65,22 +65,36 @@ O run escreve em `runs/<run_id>/` (ex.: `runs/quickstart_btc_usdt_1min/`):
 - `summary.html` (quando `report.html=true`)
 - `dashboard.html` (quando `report.html=true`)
 
-## CLI (MVP): comandos e exemplos
+## TUI (MVP): comandos e exemplos
 
 ```bash
-cargo run -p kairos-cli -- backtest --config configs/sample.toml --out runs/
-cargo run -p kairos-cli -- paper --config configs/sample.toml --out runs/
-cargo run -p kairos-cli -- validate --config configs/sample.toml
-cargo run -p kairos-cli -- report --input runs/<run_id>/
-cargo run -p kairos-cli -- --build-info
+cargo run -p kairos-tui --
 ```
 
 O que esperar:
 
-- `backtest`: cria `runs/<run_id>/` e escreve os artefatos listados acima.
-- `paper`: replay deterministico (sem esperar) quando `paper.replay_scale=0` no config.
-- `validate`: em modo strict, falha quando excede limites em `[data_quality]`.
-- `report`: regenera `summary.json`/`summary.html` a partir dos artefatos existentes (`trades.csv`, `equity.csv`, `config_snapshot.toml`).
+- Ao iniciar `kairos-alloy`, voce cai direto em um menu interativo (TUI).
+- Navegacao: `↑/↓` + `Enter`, `Esc` para voltar ao menu, `Ctrl-C` para sair.
+- Em **Backtest**: `←/→` alterna entre Validate/Backtest/Paper; `r` roda; em Validate, `s` alterna strict.
+- Gate opcional: `v` alterna "require validate" (quando on, Backtest/Paper só rodam após um Validate bem-sucedido).
+- Artefatos: Backtest/Paper criam `runs/<run_id>/` e escrevem os arquivos listados acima; Reports lista os runs em `runs/`.
+
+## Experimentos (determinismo)
+
+Workflow recomendado:
+
+1) Rode a TUI: `cargo run -p kairos-tui --`
+2) Setup: selecione uma config em `configs/` (ou recente)
+3) (Opcional) Ative o gate `v` e rode **Validate** antes de rodar Backtest/Paper
+4) Rode Backtest/Paper e verifique os artefatos em `runs/<run_id>/`
+
+Comparar dois runs:
+
+```bash
+scripts/compare_runs.py runs/<run_a> runs/<run_b>
+```
+
+O comparador valida `equity.csv`, `trades.csv` e `summary.json` (com normalizacao que ignora `run_id` e `config_snapshot`).
 
 ## Configuracao (`configs/*.toml`)
 
@@ -120,7 +134,7 @@ Linux (x86_64):
 ```bash
 sha256sum -c kairos-X.Y.Z-x86_64-unknown-linux-gnu.tar.gz.sha256
 tar -xzf kairos-X.Y.Z-x86_64-unknown-linux-gnu.tar.gz
-./kairos-X.Y.Z-x86_64-unknown-linux-gnu/bin/kairos-alloy --version
+./kairos-X.Y.Z-x86_64-unknown-linux-gnu/bin/kairos-alloy
 ./kairos-X.Y.Z-x86_64-unknown-linux-gnu/bin/kairos-ingest --help
 ```
 
@@ -130,7 +144,7 @@ Windows (x86_64, PowerShell):
 # Compare o hash do arquivo com o valor dentro do .sha256
 Get-FileHash kairos-X.Y.Z-x86_64-pc-windows-msvc.zip -Algorithm SHA256
 Expand-Archive kairos-X.Y.Z-x86_64-pc-windows-msvc.zip -DestinationPath .
-.\kairos-X.Y.Z-x86_64-pc-windows-msvc\bin\kairos-alloy.exe --version
+.\kairos-X.Y.Z-x86_64-pc-windows-msvc\bin\kairos-alloy.exe
 .\kairos-X.Y.Z-x86_64-pc-windows-msvc\bin\kairos-ingest.exe --help
 ```
 
@@ -139,7 +153,7 @@ Expand-Archive kairos-X.Y.Z-x86_64-pc-windows-msvc.zip -DestinationPath .
 Rodar benchmark sintético de 500k barras em `--release` (mede throughput do engine e pipeline de features):
 
 ```bash
-cargo run -p kairos-cli --release -- bench --bars 500000 --mode features --json
+cargo run -p kairos-bench --release -- --bars 500000 --mode features --json
 ```
 
 ### Profiling (CPU flamegraph)
@@ -147,20 +161,20 @@ cargo run -p kairos-cli --release -- bench --bars 500000 --mode features --json
 Para gerar um flamegraph SVG do benchmark:
 
 ```bash
-cargo run -p kairos-cli --release -- bench --bars 500000 --mode features --profile-svg runs/flamegraph.svg
+cargo run -p kairos-bench --release -- --bars 500000 --mode features --profile-svg runs/flamegraph.svg
 ```
 
 ## Observabilidade (logs + métricas)
 
-Logs (por padrão: `info`, formato `pretty`):
+Logs:
 
-- `--log-level`: filtro do `tracing_subscriber::EnvFilter` (ex.: `debug`, `info`, `warn`)
-- `--log-format`: `pretty` ou `json`
-- `KAIROS_LOG`: override completo do filtro (ex.: `KAIROS_LOG=debug,kairos_application=trace`)
+- Logs são exibidos na TUI (painel inferior).
+- `KAIROS_LOG` controla o filtro do `tracing_subscriber::EnvFilter` (ex.: `KAIROS_LOG=debug,kairos_application=trace`).
 
 Métricas (Prometheus):
 
-- `--metrics-addr 127.0.0.1:9898` habilita um endpoint HTTP em `/metrics`
+- `KAIROS_METRICS_ADDR=127.0.0.1:9898` habilita um endpoint HTTP em `/metrics` ao rodar `kairos-alloy`.
+- No `kairos-bench`, `--metrics-addr 127.0.0.1:9898` habilita o mesmo endpoint durante o benchmark.
 - No `/metrics`, `.` vira `_` (ex.: `kairos.infra.postgres.query_ms` → `kairos_infra_postgres_query_ms_*`).
 - Counters seguem a convenção Prometheus com sufixo `_total`.
 - Métricas infra (principais; exemplos de nomes no `/metrics`):
@@ -181,10 +195,10 @@ Alertas:
 
 - Prometheus carrega regras em `observability/prometheus/alerts.yml` (veja em `http://localhost:9090/alerts`).
 
-Rodar o CLI com métricas (ex.: `bench`):
+Rodar o benchmark com métricas:
 
 ```bash
-cargo run -p kairos-cli --release -- --metrics-addr 0.0.0.0:9898 bench --bars 50000000 --mode features --json
+cargo run -p kairos-bench --release -- --metrics-addr 0.0.0.0:9898 --bars 50000000 --mode features --json
 ```
 
 Abrir:
@@ -300,7 +314,7 @@ cargo test -p kairos-ingest
 
 ## Testes E2E (PRD20 / Postgres)
 
-Os E2E PRD20 vivem em `crates/kairos-cli/tests/prd20_integration.rs` e ficam desabilitados por padrao.
+Os E2E PRD20 vivem em `crates/kairos-application/tests/prd20_integration.rs` e ficam desabilitados por padrao.
 Para habilitar, exporte `KAIROS_DB_RUN_TESTS=1` e forneca `KAIROS_DB_URL`.
 
 Dentro do compose (subindo o Postgres local):
@@ -311,7 +325,7 @@ docker compose up -d db
 export KAIROS_DB_RUN_TESTS=1
 export KAIROS_DB_URL="postgres://kairos:$KAIROS_DB_PASSWORD@localhost:5432/$KAIROS_DB_NAME"
 
-cargo test -p kairos-cli --test prd20_integration --locked
+cargo test -p kairos-application --test prd20_integration --locked
 ```
 
 No GitHub Actions, esses testes rodam no workflow `CI (Postgres)` em `.github/workflows/ci-postgres.yml`.
@@ -333,7 +347,7 @@ O workflow `Coverage` (`.github/workflows/coverage.yml`) publica um relatorio HT
 
 ## Performance/Stress (CI)
 
-O workflow `Perf Bench` (`.github/workflows/perf-bench.yml`) roda diariamente (scheduled) o `bench` em `--release` e publica `target/bench_engine.json` e `target/bench_features.json` como artifacts.
+O workflow `Perf Bench` (`.github/workflows/perf-bench.yml`) roda diariamente (scheduled) o `kairos-bench` em `--release` e publica `target/bench_engine.json` e `target/bench_features.json` como artifacts.
 
 ## Segurança (checks locais)
 

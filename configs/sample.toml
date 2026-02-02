@@ -76,6 +76,7 @@ feature_version = "v1"
 
 [data_quality]
 max_gaps = 0
+max_missing_bars = 0
 max_duplicates = 0
 max_out_of_order = 0
 max_invalid_close = 0

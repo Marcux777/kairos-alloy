@@ -34,9 +34,9 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           echo "release version: ${VERSION}"
 
-          cli_ver="$(python - <<'PY'
+          tui_ver="$(python - <<'PY'
           import tomllib, pathlib
-          data = tomllib.loads(pathlib.Path("crates/kairos-cli/Cargo.toml").read_text(encoding="utf-8"))
+          data = tomllib.loads(pathlib.Path("crates/kairos-tui/Cargo.toml").read_text(encoding="utf-8"))
           print(data["package"]["version"])
           PY
           )"
@@ -47,7 +47,7 @@ jobs:
           PY
           )"
 
-          test "${cli_ver}" = "${VERSION}" || (echo "kairos-cli version ${cli_ver} != ${VERSION}" && exit 1)
+          test "${tui_ver}" = "${VERSION}" || (echo "kairos-tui version ${tui_ver} != ${VERSION}" && exit 1)
           test "${ingest_ver}" = "${VERSION}" || (echo "kairos-ingest version ${ingest_ver} != ${VERSION}" && exit 1)
 
       - name: RustSec Audit
@@ -111,7 +111,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --release --locked -p kairos-cli --bin kairos-alloy
+          cargo build --release --locked -p kairos-tui --bin kairos-alloy
           cargo build --release --locked -p kairos-ingest --bin kairos-ingest
 
       - name: Stage dist

@@ -239,6 +239,7 @@ pub fn config_snapshot_json(
         },
         "data_quality": config.data_quality.as_ref().map(|dq| serde_json::json!({
             "max_gaps": dq.max_gaps,
+            "max_missing_bars": dq.max_missing_bars,
             "max_duplicates": dq.max_duplicates,
             "max_out_of_order": dq.max_out_of_order,
             "max_invalid_close": dq.max_invalid_close,

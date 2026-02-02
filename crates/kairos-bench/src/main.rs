@@ -1,7 +1,98 @@
+use clap::Parser;
 use std::fs;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
-pub(super) fn run_bench(
+#[derive(Parser)]
+#[command(name = "kairos-bench")]
+#[command(about = "Synthetic benchmark tool for Kairos Alloy (dev)")]
+struct Args {
+    /// Number of synthetic bars to generate (default: 500_000).
+    #[arg(long, default_value_t = 500_000)]
+    bars: usize,
+
+    /// Timeframe step in seconds for timestamps (default: 60).
+    #[arg(long, default_value_t = 60)]
+    step_seconds: i64,
+
+    /// Benchmark mode: engine (baseline strategy) or features (feature pipeline + HOLD).
+    #[arg(long, default_value = "features")]
+    mode: String,
+
+    /// Print a single JSON line instead of human output.
+    #[arg(long, default_value_t = false)]
+    json: bool,
+
+    /// Prometheus metrics listen addr (e.g. 127.0.0.1:9898). Optional.
+    #[arg(long)]
+    metrics_addr: Option<String>,
+
+    /// Write a CPU profile as an SVG flamegraph to this path (requires feature `pprof`).
+    #[arg(long)]
+    profile_svg: Option<PathBuf>,
+}
+
+fn main() {
+    let args = Args::parse();
+
+    if let Err(err) = init_tracing() {
+        eprintln!("error: {err}");
+        std::process::exit(1);
+    }
+    if let Err(err) = init_metrics(args.metrics_addr.as_deref()) {
+        eprintln!("error: {err}");
+        std::process::exit(1);
+    }
+
+    if let Err(err) = run_bench(
+        args.bars,
+        args.step_seconds,
+        args.mode,
+        args.json,
+        args.profile_svg,
+    ) {
+        eprintln!("error: {err}");
+        std::process::exit(1);
+    }
+}
+
+fn init_tracing() -> Result<(), String> {
+    let filter = std::env::var("KAIROS_LOG").unwrap_or_else(|_| "info".to_string());
+    let env_filter = tracing_subscriber::EnvFilter::try_new(filter)
+        .map_err(|err| format!("invalid log filter: {err}"))?;
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
+    Ok(())
+}
+
+#[cfg(feature = "prometheus")]
+fn init_metrics(metrics_addr: Option<&str>) -> Result<Option<SocketAddr>, String> {
+    use metrics_exporter_prometheus::PrometheusBuilder;
+
+    let Some(raw) = metrics_addr else {
+        return Ok(None);
+    };
+    let addr: SocketAddr = raw
+        .parse()
+        .map_err(|err| format!("invalid --metrics-addr (expected host:port): {err}"))?;
+
+    PrometheusBuilder::new()
+        .with_http_listener(addr)
+        .install()
+        .map_err(|err| format!("failed to install prometheus exporter: {err}"))?;
+
+    tracing::info!(metrics_addr = %addr, "prometheus metrics exporter enabled");
+    Ok(Some(addr))
+}
+
+#[cfg(not(feature = "prometheus"))]
+fn init_metrics(metrics_addr: Option<&str>) -> Result<Option<SocketAddr>, String> {
+    if metrics_addr.is_some() {
+        return Err("metrics exporter requires kairos-bench feature `prometheus`".to_string());
+    }
+    Ok(None)
+}
+
+fn run_bench(
     bars: usize,
     step_seconds: i64,
     mode: String,
@@ -26,7 +117,7 @@ pub(super) fn run_bench(
 
     #[cfg(not(feature = "pprof"))]
     if profile_svg.is_some() {
-        return Err("profiling requires kairos-cli feature `pprof`".to_string());
+        return Err("profiling requires kairos-bench feature `pprof`".to_string());
     }
 
     let bench = kairos_application::benchmarking::run_bench(bars, step_seconds, &mode_label)?;

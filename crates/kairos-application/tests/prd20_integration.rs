@@ -1,9 +1,11 @@
+use kairos_infrastructure::artifacts::FilesystemArtifactWriter;
+use kairos_infrastructure::persistence::postgres_ohlcv::PostgresMarketDataRepository;
+use kairos_infrastructure::sentiment::FilesystemSentimentRepository;
 use kairos_ingest::{ingest_kucoin, migrate_db, Market};
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -46,9 +48,7 @@ impl MockKucoinServer {
             while !stop_clone.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
-                        if handle_connection(&mut stream, &candles_json).is_err() {
-                            // ignore
-                        }
+                        let _ = handle_connection(&mut stream, &candles_json);
                     }
                     Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(10));
@@ -118,17 +118,21 @@ fn kucoin_spot_payload() -> String {
     // [timestamp, open, close, high, low, volume, turnover?]
     //
     // Timestamps are epoch seconds.
-    let data = r#"
+    r#"
 {
   "code": "200000",
   "data": [
-    ["1704067200","100.0","101.0","102.0","99.0","10.0","1000.0"],
-    ["1704067260","101.0","100.5","103.0","100.0","11.0","1100.0"],
-    ["1704067320","100.5","102.0","104.0","100.2","12.0","1200.0"]
+    [1704067200,"100","101","102","99","10","0"],
+    [1704067260,"101","102","103","100","10","0"],
+    [1704067320,"102","103","104","101","10","0"],
+    [1704067380,"103","104","105","102","10","0"],
+    [1704067440,"104","105","106","103","10","0"],
+    [1704067500,"105","106","107","104","10","0"]
   ]
 }
-"#;
-    data.trim().to_string()
+"#
+    .trim()
+    .to_string()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -225,9 +229,9 @@ fn write_sentiment_json(dir: &Path, name: &str) -> PathBuf {
     path
 }
 
-fn run_cli(bin: &str, args: &[&str]) {
-    let status = Command::new(bin).args(args).status().expect("run cli");
-    assert!(status.success(), "cli failed: {bin} {:?}", args);
+fn build_market_repo(db_url: &str) -> PostgresMarketDataRepository {
+    PostgresMarketDataRepository::new(db_url.to_string(), "ohlcv_candles".to_string(), 1)
+        .expect("market repo")
 }
 
 #[tokio::test]
@@ -284,19 +288,23 @@ async fn prd20_e2e_ingest_then_backtest_csv_sentiment() {
         None,
     );
 
-    let cli_bin = env!("CARGO_BIN_EXE_kairos-alloy");
-    run_cli(
-        cli_bin,
-        &[
-            "backtest",
-            "--config",
-            config_path.to_str().unwrap(),
-            "--out",
-            tmp_dir.to_str().unwrap(),
-        ],
-    );
+    let (config, config_toml) =
+        kairos_application::config::load_config_with_source(&config_path).expect("config load");
+    let market = build_market_repo(&db_url);
+    let sentiment = FilesystemSentimentRepository;
+    let artifacts = FilesystemArtifactWriter::new();
 
-    let run_dir = tmp_dir.join(&run_id);
+    let run_dir = kairos_application::backtesting::run_backtest(
+        &config,
+        &config_toml,
+        None,
+        &market,
+        &sentiment,
+        &artifacts,
+        None,
+    )
+    .expect("backtest");
+
     assert!(run_dir.join("summary.json").exists());
     assert!(run_dir.join("trades.csv").exists());
     assert!(run_dir.join("equity.csv").exists());
@@ -358,19 +366,23 @@ async fn prd20_smoke_paper_json_sentiment() {
         Some(100_000),
     );
 
-    let cli_bin = env!("CARGO_BIN_EXE_kairos-alloy");
-    run_cli(
-        cli_bin,
-        &[
-            "paper",
-            "--config",
-            config_path.to_str().unwrap(),
-            "--out",
-            tmp_dir.to_str().unwrap(),
-        ],
-    );
+    let (config, config_toml) =
+        kairos_application::config::load_config_with_source(&config_path).expect("config load");
+    let market = build_market_repo(&db_url);
+    let sentiment = FilesystemSentimentRepository;
+    let artifacts = FilesystemArtifactWriter::new();
 
-    let run_dir = tmp_dir.join(&run_id);
+    let run_dir = kairos_application::paper_trading::run_paper(
+        &config,
+        &config_toml,
+        None,
+        &market,
+        &sentiment,
+        &artifacts,
+        None,
+    )
+    .expect("paper");
+
     assert!(run_dir.join("summary.json").exists());
     assert!(run_dir.join("trades.csv").exists());
     assert!(run_dir.join("equity.csv").exists());

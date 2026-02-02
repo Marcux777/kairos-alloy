@@ -135,6 +135,7 @@ pub struct MetricsConfig {
 #[serde(deny_unknown_fields)]
 pub struct DataQualityConfig {
     pub max_gaps: Option<usize>,
+    pub max_missing_bars: Option<usize>,
     pub max_duplicates: Option<usize>,
     pub max_out_of_order: Option<usize>,
     pub max_invalid_close: Option<usize>,

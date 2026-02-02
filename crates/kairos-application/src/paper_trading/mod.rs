@@ -12,7 +12,9 @@ use kairos_domain::repositories::sentiment::{
     SentimentFormat, SentimentQuery, SentimentRepository,
 };
 use kairos_domain::services::audit::AuditEvent;
-use kairos_domain::services::engine::backtest::{BacktestResults, BacktestRunner};
+use kairos_domain::services::engine::backtest::{
+    BacktestResults, BacktestRunError, BacktestRunner, BarProgress, NoopControl, RunControl,
+};
 use kairos_domain::services::features;
 use kairos_domain::services::market_data_source::MarketDataSource;
 use kairos_domain::services::ohlcv::{data_quality_from_bars, resample_bars};
@@ -33,6 +35,55 @@ pub fn run_paper(
     sentiment_repo: &dyn SentimentRepository,
     artifacts: &dyn ArtifactWriter,
     remote_agent: Option<Box<dyn AgentPort>>,
+) -> Result<PathBuf, String> {
+    run_paper_streaming(
+        config,
+        config_toml,
+        out,
+        market_data,
+        sentiment_repo,
+        artifacts,
+        remote_agent,
+        &mut |_progress: BarProgress| {},
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_paper_streaming(
+    config: &Config,
+    config_toml: &str,
+    out: Option<PathBuf>,
+    market_data: &dyn MarketDataRepository,
+    sentiment_repo: &dyn SentimentRepository,
+    artifacts: &dyn ArtifactWriter,
+    remote_agent: Option<Box<dyn AgentPort>>,
+    progress: &mut dyn FnMut(BarProgress),
+) -> Result<PathBuf, String> {
+    let control = NoopControl;
+    run_paper_streaming_control(
+        config,
+        config_toml,
+        out,
+        market_data,
+        sentiment_repo,
+        artifacts,
+        remote_agent,
+        &control,
+        progress,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_paper_streaming_control(
+    config: &Config,
+    config_toml: &str,
+    out: Option<PathBuf>,
+    market_data: &dyn MarketDataRepository,
+    sentiment_repo: &dyn SentimentRepository,
+    artifacts: &dyn ArtifactWriter,
+    remote_agent: Option<Box<dyn AgentPort>>,
+    control: &dyn RunControl,
+    progress: &mut dyn FnMut(BarProgress),
 ) -> Result<PathBuf, String> {
     let _span = info_span!(
         "run_paper",
@@ -267,7 +318,11 @@ pub fn run_paper(
         size_mode,
         execution.clone(),
     );
-    let results = runner.run();
+    let results = runner
+        .run_with_progress_control(progress, control)
+        .map_err(|err| match err {
+            BacktestRunError::Cancelled => "paper run cancelled".to_string(),
+        })?;
     let engine_ms = stage_start.elapsed().as_millis() as f64;
     metrics::histogram!("kairos.paper.engine_ms").record(engine_ms);
     metrics::gauge!("kairos.paper.bars_processed").set(results.summary.bars_processed as f64);

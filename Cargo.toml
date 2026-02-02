@@ -1,9 +1,10 @@
 [workspace]
 members = [
-  "crates/kairos-cli",
   "crates/kairos-ingest",
   "crates/kairos-domain",
   "crates/kairos-application",
   "crates/kairos-infrastructure",
+  "crates/kairos-bench",
+  "crates/kairos-tui",
 ]
 resolver = "2"

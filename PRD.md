@@ -1,10 +1,10 @@
 # Kairos Alloy PRD - MVP
 
-**Sistema de backtesting e execução em Rust**  
-**Com integração a agente DRL e sentimento em Python**  
-**Versão:** v0.2 (rascunho)  
-**Data:** 26/01/2026  
-**Autor:** Marcus Vinicius Santos da Silva  
+**Sistema de backtesting e execução em Rust**
+**Com integração a agente DRL e sentimento em Python**
+**Versão:** v0.2 (rascunho)
+**Data:** 26/01/2026
+**Autor:** Marcus Vinicius Santos da Silva
 **Orientação:** Maria Jose Pereira Dantas
 
 **Mudanças na v0.2:** renomeação para Kairos Alloy; inclusão de mitigação para look-ahead bias em sentimento (sentiment_lag); recomendação de HTTP keep-alive e roadmap para gRPC/ZeroMQ; detalhamento de normalização no lado Python; divisão do milestone M2 em M2a/M2b.
@@ -79,7 +79,7 @@ No contexto do estudo, é necessário um sistema que permita: (i) executar backt
 
 ### 3.1 Objetivo do MVP
 
-Entregar um aplicativo de linha de comando (CLI) em Rust que rode backtests e paper trading (simulado em tempo real), chamando um agente externo (serviço Python) para decidir ações, registrando trades e calculando métricas de desempenho.
+Entregar um aplicativo de Interface de Terminal (TUI) em Rust que centralize a execução de backtests e paper trading. A interação será puramente visual e interativa via teclado/mouse no terminal, eliminando a necessidade de decorare subcomandos de CLI. O sistema chamará o agente externo (Python), exibindo trades e métricas em tempo real em dashboards ricos.
 
 ### 3.2 Objetivos de pesquisa suportados
 
@@ -107,6 +107,7 @@ Entregar um aplicativo de linha de comando (CLI) em Rust que rode backtests e pa
 - Estratégias baseline embutidas em Rust para sanity check (buy-and-hold e média móvel).
 - Cálculo de métricas: Lucro líquido, Sharpe Ratio, Maximum Drawdown; exportação de curva de patrimônio e lista de trades.
 - Relatório final em JSON/CSV (e opcionalmente HTML simples) + logs estruturados.
+- **Interface TUI (Terminal User Interface):** Painel interativo para monitorar execução, PnL, logs e gráficos ASCII/Unicode em tempo real.
 
 ### 5.2 Fora de escopo (para depois do MVP)
 
@@ -118,24 +119,20 @@ Entregar um aplicativo de linha de comando (CLI) em Rust que rode backtests e pa
 
 ## 6. Requisitos funcionais
 
-### 6.1 CLI e configuração
+### 6.1 Interface de Usuário (TUI)
 
-- O sistema deve expor um comando principal (kairos-alloy) com subcomandos: backtest, paper, validate, report.
-- O sistema deve aceitar um arquivo de configuração (TOML) contendo conexão do banco, timeframe, custos, limites de risco e parâmetros do agente.
-- O sistema deve permitir seleção de estratégia: baseline (interna) ou agente externo (API).
+- O sistema deve iniciar diretamente em uma interface gráfica de terminal (TUI) baseada em `ratatui`.
+- **Menu Principal:** Navegação intuitiva entre os modos: Backtest, Paper Trading, Validate, Reports, Settings.
+- **Configuração Interativa:**
+  - Carregar arquivos de configuração (`.toml`) via navegador de arquivos na TUI.
+  - Editar parâmetros rápidos (ex.: capital inicial, timeframe) diretamente em formulários na tela antes de rodar.
+- **Controle de Execução:** Botões ou atalhos para Start, Stop, Pause e Step-by-Step.
 
-**Comportamento esperado (MVP)**
+**Comportamento esperado**
 
-- O CLI deve aceitar `--config <path>` em todos os subcomandos principais.
-- O CLI deve permitir definir um diretório de saída por execução (ex.: `--out <dir>`), gerando subpastas por `run_id`.
-- O CLI deve emitir `config_snapshot.toml` dentro do diretório de saída para reprodutibilidade.
-
-**Exemplos de uso (referência)**
-
-- `kairos-alloy backtest --config config.toml --out runs/`
-- `kairos-alloy paper --config config.toml --out runs/`
-- `kairos-alloy validate --config config.toml`
-- `kairos-alloy report --input runs/<run_id>/`
+- Ao executar o binário `kairos-alloy`, a TUI abre imediatamente.
+- Argumentos de lançamento opcionais apenas para pré-carregar configs (ex.: `kairos-alloy --config config.toml` já abre a TUI com o setup pronto).
+- Toda a saída de logs e status deve ser apresentada em painéis da TUI, não no stdout padrão (para não quebrar a interface).
 
 ### 6.2 Ingestão de dados
 
@@ -204,6 +201,18 @@ Response:
 - `model_version` (string, opcional): versão do modelo.
 - `latency_ms` (number, opcional): latência observada no lado Python (para diagnóstico).
 
+### 6.7 Interface TUI (Core Experience)
+
+- Bibliotecas: `ratatui` + `crossterm`.
+- **Layout Fixo:**
+  - **Sidebar:** Menu de navegação e status do sistema (DB connection, Agent status).
+  - **Main Area:**
+    - *Setup View:* Definição de parâmetros e escolha de dataset.
+    - *Monitor View:* Gráficos de candlestick (ASCII/Braille), Equity Curve e lista de Trades recentes.
+    - *Report View:* Tabelas de métricas e resumo pós-execução.
+  - **Bottom Bar:** Logs em tempo real e barra de status/atalhos.
+- **Input:** Navegação completa por teclado (setas, Tab, Enter, Esc) e suporte opcional a mouse.
+
 ### 6.6 Métricas e relatórios
 
 - Lucro líquido: diferença entre capital final e capital inicial (considerando fees).
@@ -236,7 +245,9 @@ Arquitetura modular em Rust, com separação clara entre domínio, infraestrutur
 - risk: validação de ordens e limites.
 - agents: estratégias internas + client HTTP para agente externo.
 - report: exportação de artefatos (CSV/JSON/HTML).
-- cli: interface de linha de comando e config.
+- tui: camada de apresentação (Main Loop da interface, Widgets, Event Handling).
+- main: entry-point que inicializa a TUI.
+- (Removido: cli como driver principal).
 
 ## 9. Critérios de sucesso do MVP
 
@@ -251,13 +262,14 @@ Cronograma alinhado às fases de implementação/validação do plano de trabalh
 
 | Milestone | Entrega | Conteúdo | Critério de aceite |
 | --- | --- | --- | --- |
-| M0 | Setup | Repo Rust + CLI base + config TOML + logging | Compila e roda `kairos-alloy --help` |
+| M0 | Setup | Repo Rust + TUI base (App Main Loop) + logging | Compila e abre interface vazia com menu |
 | M1 | Data | Ingestor OHLCV -> PostgreSQL + sentimento + validação | Carrega dataset e imprime resumo |
 | M2a | Engine | Loop do backtest: iteração por barras + sincronização temporal + cálculo de indicadores/features | Itera sobre dataset e produz observation por barra (sem ordens) |
 | M2b | Orders | Execução simulada + ordens (buy/sell/hold) + PnL + trades | Gera trades.csv e equity.csv com baseline |
 | M3 | Metrics | Lucro, Sharpe, Max Drawdown + summary.json | Métricas batem com caso de teste |
-| M4 | Agents | Baselines + client HTTP (keep-alive) para agente Python | Backtest roda com agente dummy e registra latência |
-| M5 | Paper | Replay em tempo real + timeouts/fallback + logs estruturados | 1h de execução contínua em replay |
+| M4 | Agents | Integração na TUI: Status do agente e Latency Widget | TUI mostra status "Connected" e latência em tempo real |
+| M5 | TUI Charts | Gráficos de Vela e Equity com `ratatui` widgets | Visualização gráfica funcional no terminal |
+| M6 | Paper e Release | Integração final de paper trading com controles (Start/Stop) na TUI | Sistema completo controlado via interface |
 
 ## 11. Riscos e mitigação
 
@@ -389,10 +401,12 @@ Restrições e convenções (MVP):
 
 ## 17. Critérios de aceitação por módulo
 
-### 17.1 CLI
+### 17.1 TUI/UX
 
-- `kairos-alloy --help` lista subcomandos e exemplos.
-- `kairos-alloy backtest --config path.toml` executa e gera artefatos.
+- O binário abre o menu principal.
+- É possível navegar para "Backtest", carregar um config e iniciar a execução.
+- Durante a execução, o dashboard atualiza equity e trades sem "flicker".
+- Logs de erro aparecem na área de logs da interface.
 
 ### 17.2 Data
 
@@ -493,7 +507,7 @@ Papéis compradores/usuários típicos:
 
 ### 23.1 Componentes entregáveis (produto)
 
-- Binário CLI (`kairos-alloy`) para backtest/paper/validação/relatórios.
+- Binário Único (`kairos-alloy`) que contém a aplicação TUI.
 - Bibliotecas internas (crates) reutilizáveis (core/data/features/engine/risk/agents/report/cli).
 - Esquema versionado do contrato com o agente (JSON) e exemplos de requests/responses.
 
@@ -537,7 +551,7 @@ Se o objetivo for evoluir o MVP para um produto B2B comercializável, os requisi
 
 ### 25.1 Estabilidade e versionamento
 
-- Versionamento semântico (SemVer) do CLI e do contrato de agente (`api_version`, `feature_version`).
+- Versionamento semântico (SemVer) da Aplicação.
 - Compatibilidade retroativa por janela (ex.: suportar N-1 versões do contrato).
 - Changelog por release com breaking changes explícitas.
 
@@ -575,7 +589,7 @@ Este plano documenta a **construção do sistema** com foco no caminho mais simp
 Checklist mínimo para “produto B2B”:
 
 - Instalação reprodutível (binários/artefatos) e documentação de setup.
-- “Golden path” com exemplo: rodar `backtest` com dataset mínimo + agente dummy e gerar artefatos.
+- “Golden path” com exemplo: rodar um backtest via TUI com dataset mínimo + agente dummy e gerar artefatos.
 - Contrato do agente documentado com schema e exemplos (request/response).
 - Logs/artefatos com formato estável e versionado (ou compatível por janela).
 - Documentação operacional: parâmetros de performance, tuning, troubleshooting.
@@ -595,8 +609,8 @@ Entregáveis:
 
 Critérios de aceite:
 
-- `kairos-alloy backtest` executa de ponta a ponta com agente dummy e gera `summary.json`, `trades.csv`, `equity.csv`, `logs.jsonl`.
-- `kairos-alloy validate` detecta duplicatas/gaps/ordenamento e reporta de forma consistente.
+- Na TUI, o usuario consegue rodar um backtest de ponta a ponta (com agente dummy) e gerar `summary.json`, `trades.csv`, `equity.csv`, `logs.jsonl`.
+- Na TUI, o usuario consegue rodar validacao de dados (duplicatas/gaps/ordenamento) e obter um relatorio consistente.
 - O backtest é determinístico com o mesmo input.
 
 **Fase B — Packaging e distribuição (self-hosted)**
@@ -605,7 +619,7 @@ Entregáveis:
 
 - Releases com binários (Linux/Windows) e checksums.
 - (Opcional) imagem Docker para padronizar runtime.
-- `--version` e `--build-info` no CLI (commit, data, versão).
+- Metadados de build (versão, commit, data) exibidos na TUI.
 - “Quickstart” de 10 minutos para rodar um backtest.
 
 Critérios de aceite:

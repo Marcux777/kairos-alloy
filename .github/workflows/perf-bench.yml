@@ -23,11 +23,11 @@ jobs:
 
       - name: Bench (engine)
         shell: bash
-        run: cargo run -p kairos-cli --release -- bench --bars 500000 --step-seconds 60 --mode engine --json > target/bench_engine.json
+        run: cargo run -p kairos-bench --release -- --bars 500000 --step-seconds 60 --mode engine --json > target/bench_engine.json
 
       - name: Bench (features)
         shell: bash
-        run: cargo run -p kairos-cli --release -- bench --bars 500000 --step-seconds 60 --mode features --json > target/bench_features.json
+        run: cargo run -p kairos-bench --release -- --bars 500000 --step-seconds 60 --mode features --json > target/bench_features.json
 
       - name: Upload bench artifacts
         uses: actions/upload-artifact@v4
@@ -36,4 +36,3 @@ jobs:
           path: |
             target/bench_engine.json
             target/bench_features.json
-

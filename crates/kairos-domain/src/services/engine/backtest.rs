@@ -40,6 +40,16 @@ pub enum OrderSizeMode {
 }
 
 #[derive(Debug, Clone)]
+pub struct TradeInBar {
+    pub timestamp: i64,
+    pub side: Side,
+    pub quantity: f64,
+    pub price: f64,
+    pub fee: f64,
+    pub slippage: f64,
+}
+
+#[derive(Debug, Clone)]
 struct SimOrder {
     id: u64,
     side: Side,
@@ -84,6 +94,36 @@ pub struct BacktestResults {
     pub equity: Vec<EquityPoint>,
     pub audit_events: Vec<AuditEvent>,
 }
+
+#[derive(Debug, Clone)]
+pub struct BarProgress {
+    pub bar_index: u64,
+    pub timestamp: i64,
+    pub close: f64,
+    pub equity: f64,
+    pub cash: f64,
+    pub position_qty: f64,
+    pub trades_in_bar: Vec<TradeInBar>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BacktestRunError {
+    Cancelled,
+}
+
+pub trait RunControl {
+    fn should_cancel(&self) -> bool {
+        false
+    }
+
+    fn wait_if_paused(&self) -> bool {
+        true
+    }
+}
+
+pub struct NoopControl;
+
+impl RunControl for NoopControl {}
 
 impl<S, D> BacktestRunner<S, D>
 where
@@ -155,6 +195,22 @@ where
     }
 
     pub fn run(&mut self) -> BacktestResults {
+        self.run_with_progress(|_progress| {})
+    }
+
+    pub fn run_with_progress<F>(&mut self, mut on_progress: F) -> BacktestResults
+    where
+        F: FnMut(BarProgress),
+    {
+        self.run_with_progress_control(&mut on_progress, &NoopControl)
+            .expect("noop control cannot cancel")
+    }
+
+    pub fn run_with_progress_control(
+        &mut self,
+        on_progress: &mut dyn FnMut(BarProgress),
+        control: &dyn RunControl,
+    ) -> Result<BacktestResults, BacktestRunError> {
         self.audit_events.push(AuditEvent {
             run_id: self.run_id.clone(),
             timestamp: 0,
@@ -184,9 +240,21 @@ where
             }),
         });
 
-        while let Some(bar) = self.data.next_bar() {
+        let mut trades_in_bar: Vec<TradeInBar> = Vec::new();
+        loop {
+            if control.should_cancel() {
+                return Err(BacktestRunError::Cancelled);
+            }
+            if !control.wait_if_paused() {
+                return Err(BacktestRunError::Cancelled);
+            }
+
+            let Some(bar) = self.data.next_bar() else {
+                break;
+            };
+
             self.bar_index = self.bar_index.saturating_add(1);
-            self.process_open_orders(&bar);
+            self.process_open_orders(&bar, &mut trades_in_bar);
 
             if !self.halt_trading {
                 let action = self.strategy.on_bar(&bar, &self.portfolio);
@@ -194,6 +262,16 @@ where
             }
 
             self.record_equity(&bar);
+            let emitted_trades = std::mem::take(&mut trades_in_bar);
+            on_progress(BarProgress {
+                bar_index: self.bar_index,
+                timestamp: bar.timestamp,
+                close: bar.close,
+                equity: self.portfolio.equity(&bar.symbol, bar.close),
+                cash: self.portfolio.cash(),
+                position_qty: self.portfolio.position_qty(&bar.symbol),
+                trades_in_bar: emitted_trades,
+            });
 
             // Placeholder: extend with full risk/metrics/reporting.
         }
@@ -226,15 +304,15 @@ where
                 .then_with(|| a.action.cmp(&b.action))
         });
 
-        BacktestResults {
+        Ok(BacktestResults {
             summary,
             trades,
             equity,
             audit_events: std::mem::take(&mut self.audit_events),
-        }
+        })
     }
 
-    fn process_open_orders(&mut self, bar: &Bar) {
+    fn process_open_orders(&mut self, bar: &Bar, trades_in_bar: &mut Vec<TradeInBar>) {
         let mut remaining_liquidity_qty = self.bar_liquidity_cap_qty(bar);
         let fee_rate = self.fee_bps / 10_000.0;
         let is_liquidity_infinite = !remaining_liquidity_qty.is_finite();
@@ -452,6 +530,15 @@ where
 
             self.portfolio
                 .apply_fill(&self.symbol, order.side, fill_qty, exec_price, fee);
+
+            trades_in_bar.push(TradeInBar {
+                timestamp: bar.timestamp,
+                side: order.side,
+                quantity: fill_qty,
+                price: exec_price,
+                fee,
+                slippage: impact_cost,
+            });
 
             self.metrics.record_trade(Trade {
                 timestamp: bar.timestamp,
@@ -1105,6 +1192,7 @@ mod tests {
     use crate::value_objects::action_type::ActionType;
     use crate::value_objects::bar::Bar;
     use crate::value_objects::side::Side;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct DummyDataSource {
         bars: Vec<Bar>,
@@ -1127,6 +1215,232 @@ mod tests {
             self.index += 1;
             Some(bar)
         }
+    }
+
+    #[test]
+    fn run_with_progress_emits_one_event_per_bar() {
+        let bars = vec![
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 1,
+                open: 10.0,
+                high: 10.0,
+                low: 10.0,
+                close: 10.0,
+                volume: 10.0,
+            },
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 2,
+                open: 11.0,
+                high: 11.0,
+                low: 11.0,
+                close: 11.0,
+                volume: 10.0,
+            },
+        ];
+        let data = DummyDataSource::new(bars.clone());
+
+        let risk = RiskLimits {
+            max_position_qty: 10.0,
+            max_drawdown_pct: 0.99,
+            max_exposure_pct: 1.0,
+        };
+
+        struct Hold;
+        impl Strategy for Hold {
+            fn name(&self) -> &str {
+                "hold"
+            }
+            fn on_bar(&mut self, _bar: &Bar, _portfolio: &Portfolio) -> Action {
+                Action::hold()
+            }
+            fn drain_audit_events(&mut self) -> Vec<crate::services::audit::AuditEvent> {
+                Vec::new()
+            }
+        }
+
+        let mut runner = BacktestRunner::new(
+            "run".to_string(),
+            Hold,
+            data,
+            risk,
+            1000.0,
+            MetricsConfig::default(),
+            0.0,
+            0.0,
+            "BTCUSD".to_string(),
+            OrderSizeMode::Quantity,
+        );
+
+        let mut seen = Vec::new();
+        let results = runner.run_with_progress(|p| seen.push((p.bar_index, p.close, p.timestamp)));
+        assert_eq!(results.summary.bars_processed, 2);
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0].0, 1);
+        assert_eq!(seen[0].1, 10.0);
+        assert_eq!(seen[1].0, 2);
+        assert_eq!(seen[1].1, 11.0);
+    }
+
+    #[test]
+    fn run_with_progress_includes_trades_for_the_filled_bar() {
+        let bars = vec![
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 1,
+                open: 10.0,
+                high: 10.0,
+                low: 10.0,
+                close: 10.0,
+                volume: 10.0,
+            },
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 2,
+                open: 11.0,
+                high: 11.0,
+                low: 11.0,
+                close: 11.0,
+                volume: 10.0,
+            },
+        ];
+        let data = DummyDataSource::new(bars.clone());
+
+        let risk = RiskLimits {
+            max_position_qty: 10.0,
+            max_drawdown_pct: 0.99,
+            max_exposure_pct: 1.0,
+        };
+
+        struct BuyOnce {
+            used: bool,
+        }
+        impl Strategy for BuyOnce {
+            fn name(&self) -> &str {
+                "buy_once"
+            }
+            fn on_bar(&mut self, _bar: &Bar, _portfolio: &Portfolio) -> Action {
+                if self.used {
+                    return Action::hold();
+                }
+                self.used = true;
+                Action {
+                    action_type: ActionType::Buy,
+                    size: 1.0,
+                }
+            }
+            fn drain_audit_events(&mut self) -> Vec<crate::services::audit::AuditEvent> {
+                Vec::new()
+            }
+        }
+
+        let mut runner = BacktestRunner::new(
+            "run".to_string(),
+            BuyOnce { used: false },
+            data,
+            risk,
+            1000.0,
+            MetricsConfig::default(),
+            0.0,
+            0.0,
+            "BTCUSD".to_string(),
+            OrderSizeMode::Quantity,
+        );
+
+        let mut trades_seen_per_bar: Vec<(u64, usize)> = Vec::new();
+        let results = runner.run_with_progress(|p| {
+            trades_seen_per_bar.push((p.bar_index, p.trades_in_bar.len()));
+        });
+        assert_eq!(results.summary.trades, 1);
+        assert_eq!(trades_seen_per_bar.len(), 2);
+        assert_eq!(trades_seen_per_bar[0], (1, 0));
+        assert_eq!(trades_seen_per_bar[1], (2, 1));
+    }
+
+    #[test]
+    fn run_with_progress_control_can_cancel_before_next_bar() {
+        let bars = vec![
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 1,
+                open: 10.0,
+                high: 10.0,
+                low: 10.0,
+                close: 10.0,
+                volume: 10.0,
+            },
+            Bar {
+                symbol: "BTCUSD".to_string(),
+                timestamp: 2,
+                open: 11.0,
+                high: 11.0,
+                low: 11.0,
+                close: 11.0,
+                volume: 10.0,
+            },
+        ];
+        let data = DummyDataSource::new(bars.clone());
+
+        let risk = RiskLimits {
+            max_position_qty: 10.0,
+            max_drawdown_pct: 0.99,
+            max_exposure_pct: 1.0,
+        };
+
+        struct Hold;
+        impl Strategy for Hold {
+            fn name(&self) -> &str {
+                "hold"
+            }
+            fn on_bar(&mut self, _bar: &Bar, _portfolio: &Portfolio) -> Action {
+                Action::hold()
+            }
+            fn drain_audit_events(&mut self) -> Vec<crate::services::audit::AuditEvent> {
+                Vec::new()
+            }
+        }
+
+        struct CancelAfter {
+            remaining: AtomicUsize,
+        }
+        impl super::RunControl for CancelAfter {
+            fn should_cancel(&self) -> bool {
+                let remaining = self.remaining.load(Ordering::Relaxed);
+                if remaining == 0 {
+                    true
+                } else {
+                    self.remaining.store(remaining - 1, Ordering::Relaxed);
+                    false
+                }
+            }
+        }
+
+        let mut runner = BacktestRunner::new(
+            "run".to_string(),
+            Hold,
+            data,
+            risk,
+            1000.0,
+            MetricsConfig::default(),
+            0.0,
+            0.0,
+            "BTCUSD".to_string(),
+            OrderSizeMode::Quantity,
+        );
+
+        let cancel = CancelAfter {
+            remaining: AtomicUsize::new(1),
+        };
+        let mut progress_calls = 0usize;
+        let res = runner.run_with_progress_control(
+            &mut |_p| {
+                progress_calls += 1;
+            },
+            &cancel,
+        );
+        assert!(matches!(res, Err(super::BacktestRunError::Cancelled)));
+        assert_eq!(progress_calls, 1);
     }
 
     struct DummyStrategy;

@@ -22,11 +22,12 @@ exceptions = [
   # `pprof` depends on `inferno` for generating flamegraph SVGs.
   # `inferno` is licensed under CDDL-1.0 (OSI approved), which we explicitly allow here.
   { crate = "inferno", allow = ["CDDL-1.0"] },
-  { crate = "kairos-cli", allow = ["LicenseRef-Proprietary"] },
   { crate = "kairos-domain", allow = ["LicenseRef-Proprietary"] },
   { crate = "kairos-application", allow = ["LicenseRef-Proprietary"] },
   { crate = "kairos-infrastructure", allow = ["LicenseRef-Proprietary"] },
   { crate = "kairos-ingest", allow = ["LicenseRef-Proprietary"] },
+  { crate = "kairos-tui", allow = ["LicenseRef-Proprietary"] },
+  { crate = "kairos-bench", allow = ["LicenseRef-Proprietary"] },
 ]
 
 [licenses.private]
