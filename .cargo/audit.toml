@@ -1,0 +1,5 @@
+[advisories]
+ignore = [
+  # `ratatui` depends on `paste`; the crate is unmaintained and RustSec has no safe upgrade available.
+  "RUSTSEC-2024-0436",
+]

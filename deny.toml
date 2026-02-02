@@ -1,6 +1,11 @@
 [advisories]
 # RustSec advisory database configuration. Lint levels are set via CLI flags.
-ignore = []
+ignore = [
+  # `ratatui` depends on `paste`; the crate is unmaintained and RustSec has no safe upgrade available.
+  # We accept this transitive risk for now (no known vulnerability), and will revisit if `ratatui`
+  # migrates away from `paste` or a maintained alternative becomes viable.
+  "RUSTSEC-2024-0436",
+]
 
 [licenses]
 allow = [
