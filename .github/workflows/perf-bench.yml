@@ -21,6 +21,10 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Prepare output dir
+        shell: bash
+        run: mkdir -p target
+
       - name: Bench (engine)
         shell: bash
         run: cargo run -p kairos-bench --release -- --bars 500000 --step-seconds 60 --mode engine --json > target/bench_engine.json
