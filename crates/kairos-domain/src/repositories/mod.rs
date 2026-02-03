@@ -1,4 +1,5 @@
 pub mod agent;
 pub mod artifacts;
 pub mod market_data;
+pub mod market_stream;
 pub mod sentiment;

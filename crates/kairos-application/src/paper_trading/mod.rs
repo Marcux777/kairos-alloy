@@ -8,6 +8,7 @@ use kairos_domain::entities::risk::RiskLimits;
 use kairos_domain::repositories::agent::AgentClient as AgentPort;
 use kairos_domain::repositories::artifacts::ArtifactWriter;
 use kairos_domain::repositories::market_data::{MarketDataRepository, OhlcvQuery};
+use kairos_domain::repositories::market_stream::MarketStream;
 use kairos_domain::repositories::sentiment::{
     SentimentFormat, SentimentQuery, SentimentRepository,
 };
@@ -18,6 +19,7 @@ use kairos_domain::services::engine::backtest::{
 use kairos_domain::services::features;
 use kairos_domain::services::market_data_source::MarketDataSource;
 use kairos_domain::services::ohlcv::{data_quality_from_bars, resample_bars};
+use kairos_domain::services::realtime_bar::BarAggregator;
 use kairos_domain::services::sentiment;
 use kairos_domain::services::strategy::{
     AgentStrategy, BuyAndHold, HoldStrategy, SimpleSma, StrategyKind,
@@ -26,6 +28,16 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 use tracing::info_span;
+
+#[derive(Debug, Clone)]
+pub struct RealtimeStreamStatus {
+    pub connected: bool,
+    pub reconnects: u64,
+    pub last_error: Option<String>,
+    pub last_event_timestamp: Option<i64>,
+    pub out_of_order_events: u64,
+    pub invalid_events: u64,
+}
 
 pub fn run_paper(
     config: &Config,
@@ -345,6 +357,243 @@ pub fn run_paper_streaming_control(
         &execution,
         artifacts,
         audit_extras,
+    )?;
+
+    Ok(run_dir)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_paper_realtime_streaming_control(
+    config: &Config,
+    config_toml: &str,
+    out: Option<PathBuf>,
+    connect_stream: &mut dyn FnMut() -> Result<Box<dyn MarketStream>, String>,
+    sentiment_repo: &dyn SentimentRepository,
+    artifacts: &dyn ArtifactWriter,
+    _remote_agent: Option<Box<dyn AgentPort>>,
+    control: &dyn RunControl,
+    progress: &mut dyn FnMut(BarProgress),
+    on_status: &mut dyn FnMut(RealtimeStreamStatus),
+) -> Result<PathBuf, String> {
+    let _span = info_span!(
+        "run_paper_realtime",
+        run_id = %config.run.run_id,
+        symbol = %config.run.symbol,
+        timeframe = %config.run.timeframe
+    )
+    .entered();
+
+    if matches!(config.agent.mode, AgentMode::Remote) {
+        return Err(
+            "paper realtime mode does not support agent.mode=remote yet (requires online feature pipeline)"
+                .to_string(),
+        );
+    }
+
+    // Optional: we still validate/load sentiment to keep operator feedback consistent, but baseline
+    // strategies do not consume it. Remote agent mode is blocked above.
+    let _sentiment_points = if let Some(path) = &config.paths.sentiment_path {
+        let path_buf = PathBuf::from(path);
+        let ext = path_buf
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let format = if ext == "json" {
+            SentimentFormat::Json
+        } else {
+            SentimentFormat::Csv
+        };
+        let missing_policy = resolve_sentiment_missing_policy(config);
+        let (_points, _report) = sentiment_repo.load_sentiment(&SentimentQuery {
+            path: path_buf,
+            format,
+            missing_policy,
+        })?;
+        true
+    } else {
+        false
+    };
+
+    let timeframe_seconds = parse_duration_like(&config.run.timeframe)?;
+    let mut aggregator = BarAggregator::new(config.run.symbol.clone(), timeframe_seconds)?;
+
+    let stream = connect_stream()?;
+    on_status(RealtimeStreamStatus {
+        connected: true,
+        reconnects: 0,
+        last_error: None,
+        last_event_timestamp: None,
+        out_of_order_events: 0,
+        invalid_events: 0,
+    });
+
+    let mut reconnects: u64 = 0;
+    let mut backoff_ms: u64 = 250;
+    let mut last_status_emit = Instant::now();
+
+    struct StreamBarSource<'a> {
+        connect: &'a mut dyn FnMut() -> Result<Box<dyn MarketStream>, String>,
+        stream: Box<dyn MarketStream>,
+        aggregator: &'a mut BarAggregator,
+        reconnects: &'a mut u64,
+        backoff_ms: &'a mut u64,
+        last_status_emit: &'a mut Instant,
+        on_status: &'a mut dyn FnMut(RealtimeStreamStatus),
+    }
+
+    impl MarketDataSource for StreamBarSource<'_> {
+        fn next_bar(&mut self) -> Option<kairos_domain::value_objects::bar::Bar> {
+            loop {
+                match self.stream.next_event() {
+                    Ok(ev) => {
+                        if let Some(bar) = self.aggregator.ingest(ev) {
+                            let report = self.aggregator.report().clone();
+                            (self.on_status)(RealtimeStreamStatus {
+                                connected: true,
+                                reconnects: *self.reconnects,
+                                last_error: None,
+                                last_event_timestamp: report.last_event_timestamp,
+                                out_of_order_events: report.out_of_order_events,
+                                invalid_events: report.invalid_events,
+                            });
+                            return Some(bar);
+                        }
+
+                        // Throttle status updates when we're getting high-frequency ticks.
+                        if self.last_status_emit.elapsed() >= Duration::from_secs(5) {
+                            *self.last_status_emit = Instant::now();
+                            let report = self.aggregator.report().clone();
+                            (self.on_status)(RealtimeStreamStatus {
+                                connected: true,
+                                reconnects: *self.reconnects,
+                                last_error: None,
+                                last_event_timestamp: report.last_event_timestamp,
+                                out_of_order_events: report.out_of_order_events,
+                                invalid_events: report.invalid_events,
+                            });
+                        }
+                    }
+                    Err(err) => {
+                        *self.reconnects = (*self.reconnects).saturating_add(1);
+                        let report = self.aggregator.report().clone();
+                        (self.on_status)(RealtimeStreamStatus {
+                            connected: false,
+                            reconnects: *self.reconnects,
+                            last_error: Some(err.to_string()),
+                            last_event_timestamp: report.last_event_timestamp,
+                            out_of_order_events: report.out_of_order_events,
+                            invalid_events: report.invalid_events,
+                        });
+
+                        let sleep_for = Duration::from_millis((*self.backoff_ms).min(10_000));
+                        thread::sleep(sleep_for);
+                        *self.backoff_ms = (*self.backoff_ms).saturating_mul(2).min(10_000);
+
+                        match (self.connect)() {
+                            Ok(new_stream) => {
+                                self.stream = new_stream;
+                                *self.backoff_ms = 250;
+                                (self.on_status)(RealtimeStreamStatus {
+                                    connected: true,
+                                    reconnects: *self.reconnects,
+                                    last_error: None,
+                                    last_event_timestamp: report.last_event_timestamp,
+                                    out_of_order_events: report.out_of_order_events,
+                                    invalid_events: report.invalid_events,
+                                });
+                            }
+                            Err(connect_err) => {
+                                (self.on_status)(RealtimeStreamStatus {
+                                    connected: false,
+                                    reconnects: *self.reconnects,
+                                    last_error: Some(connect_err),
+                                    last_event_timestamp: report.last_event_timestamp,
+                                    out_of_order_events: report.out_of_order_events,
+                                    invalid_events: report.invalid_events,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let risk_limits = RiskLimits {
+        max_position_qty: config.risk.max_position_qty,
+        max_drawdown_pct: config.risk.max_drawdown_pct,
+        max_exposure_pct: config.risk.max_exposure_pct,
+    };
+    let size_mode = resolve_size_mode(config);
+
+    let strategy = match config.agent.mode {
+        AgentMode::Baseline => {
+            let baseline = config
+                .strategy
+                .as_ref()
+                .map(|strategy| strategy.baseline.as_str())
+                .unwrap_or("buy_and_hold");
+            match baseline {
+                "sma" => {
+                    let (short, long) = resolve_sma_windows(config);
+                    StrategyKind::SimpleSma(SimpleSma::new(short, long))
+                }
+                _ => StrategyKind::BuyAndHold(BuyAndHold::new(1.0)),
+            }
+        }
+        AgentMode::Hold => StrategyKind::Hold(HoldStrategy),
+        AgentMode::Remote => unreachable!("checked above"),
+    };
+
+    let metrics_config = build_metrics_config(config);
+    let execution = resolve_execution_config(config)?;
+
+    let data = StreamBarSource {
+        connect: connect_stream,
+        stream,
+        aggregator: &mut aggregator,
+        reconnects: &mut reconnects,
+        backoff_ms: &mut backoff_ms,
+        last_status_emit: &mut last_status_emit,
+        on_status,
+    };
+
+    let stage_start = Instant::now();
+    let mut runner = BacktestRunner::new_with_execution(
+        config.run.run_id.clone(),
+        strategy,
+        data,
+        risk_limits,
+        config.run.initial_capital,
+        metrics_config,
+        config.costs.fee_bps,
+        config.run.symbol.clone(),
+        size_mode,
+        execution.clone(),
+    );
+
+    let results = runner
+        .run_with_progress_control(progress, control)
+        .map_err(|err| match err {
+            BacktestRunError::Cancelled => "paper realtime run cancelled".to_string(),
+        })?;
+
+    let engine_ms = stage_start.elapsed().as_millis() as f64;
+    metrics::histogram!("kairos.paper_realtime.engine_ms").record(engine_ms);
+    metrics::gauge!("kairos.paper_realtime.bars_processed")
+        .set(results.summary.bars_processed as f64);
+    metrics::gauge!("kairos.paper_realtime.trades").set(results.summary.trades as f64);
+
+    // Only write outputs if the run completes (cancelled runs intentionally do not write artifacts).
+    let run_dir = write_outputs(
+        config,
+        config_toml,
+        out,
+        results,
+        &execution,
+        artifacts,
+        Vec::new(),
     )?;
 
     Ok(run_dir)

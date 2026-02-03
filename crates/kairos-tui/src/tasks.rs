@@ -17,6 +17,7 @@ pub enum TaskKind {
     Validate { strict: bool },
     Backtest,
     Paper,
+    PaperRealtime,
 }
 
 #[derive(Debug, Clone)]
@@ -39,7 +40,18 @@ pub struct BarProgressSample {
 pub enum TaskEvent {
     Input(crossterm::event::Event),
     Progress(BarProgressSample),
+    StreamStatus(StreamStatusSample),
     TaskFinished(Result<String, String>),
+}
+
+#[derive(Debug, Clone)]
+pub struct StreamStatusSample {
+    pub connected: bool,
+    pub reconnects: u64,
+    pub last_error: Option<String>,
+    pub last_event_timestamp: Option<i64>,
+    pub out_of_order_events: u64,
+    pub invalid_events: u64,
 }
 
 #[derive(Clone)]
@@ -121,7 +133,9 @@ impl TaskRunner {
         let tx = inner.tx.clone();
         tokio::task::spawn_blocking(move || {
             let control = match kind {
-                TaskKind::Backtest | TaskKind::Paper => Some(TaskControl::new()),
+                TaskKind::Backtest | TaskKind::Paper | TaskKind::PaperRealtime => {
+                    Some(TaskControl::new())
+                }
                 _ => None,
             };
             {
@@ -170,6 +184,7 @@ fn run_task(
         TaskKind::Validate { strict } => run_validate(config, strict),
         TaskKind::Backtest => run_backtest(config, config_toml, tx, control),
         TaskKind::Paper => run_paper(config, config_toml, tx, control),
+        TaskKind::PaperRealtime => run_paper_realtime(config, config_toml, tx, control),
     }
 }
 
@@ -405,4 +420,98 @@ fn run_paper(
         }
     }
     Ok(format!("paper run complete: {}", run_dir.display()))
+}
+
+fn run_paper_realtime(
+    config: &kairos_application::config::Config,
+    config_toml: &str,
+    tx: &tokio::sync::mpsc::UnboundedSender<TaskEvent>,
+    control: Option<&dyn kairos_domain::services::engine::backtest::RunControl>,
+) -> Result<String, String> {
+    use kairos_domain::repositories::market_stream::MarketStream;
+
+    if config.db.exchange.to_lowercase() != "kucoin" || config.db.market.to_lowercase() != "spot" {
+        return Err(
+            "paper realtime currently supports only db.exchange=kucoin and db.market=spot"
+                .to_string(),
+        );
+    }
+
+    let sentiment_repo = build_sentiment_repo();
+    let artifacts = FilesystemArtifactWriter::new();
+    let remote_agent = build_remote_agent(config)?;
+
+    let mut connect_stream = || -> Result<Box<dyn MarketStream>, String> {
+        #[cfg(feature = "realtime-kucoin")]
+        {
+            let stream =
+                kairos_infrastructure::market_stream::kucoin::KucoinPublicTickerStream::connect(
+                    config.run.symbol.clone(),
+                )?;
+            Ok(Box::new(stream))
+        }
+        #[cfg(not(feature = "realtime-kucoin"))]
+        {
+            Err("kairos-tui was built without feature realtime-kucoin".to_string())
+        }
+    };
+
+    let mut progress = |p: kairos_domain::services::engine::backtest::BarProgress| {
+        let bar_index = p.bar_index;
+        let x = bar_index as f64;
+        let has_trades = !p.trades_in_bar.is_empty();
+
+        if bar_index.is_multiple_of(STREAM_EVERY_N_BARS) || has_trades {
+            let trades_in_bar = if has_trades {
+                p.trades_in_bar
+                    .into_iter()
+                    .map(|t| TradeSample {
+                        bar_index,
+                        timestamp: t.timestamp,
+                        side: t.side,
+                        quantity: t.quantity,
+                        price: t.price,
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            let _ = tx.send(TaskEvent::Progress(BarProgressSample {
+                x,
+                price: p.close,
+                equity: p.equity,
+                trades_in_bar,
+            }));
+        }
+    };
+
+    let mut on_status = |s: kairos_application::paper_trading::RealtimeStreamStatus| {
+        let _ = tx.send(TaskEvent::StreamStatus(StreamStatusSample {
+            connected: s.connected,
+            reconnects: s.reconnects,
+            last_error: s.last_error,
+            last_event_timestamp: s.last_event_timestamp,
+            out_of_order_events: s.out_of_order_events,
+            invalid_events: s.invalid_events,
+        }));
+    };
+
+    let run_dir = if let Some(control) = control {
+        kairos_application::paper_trading::run_paper_realtime_streaming_control(
+            config,
+            config_toml,
+            None,
+            &mut connect_stream,
+            sentiment_repo.as_ref(),
+            &artifacts,
+            remote_agent,
+            control,
+            &mut progress,
+            &mut on_status,
+        )?
+    } else {
+        return Err("paper realtime requires a RunControl (pause/stop)".to_string());
+    };
+
+    Ok(run_dir.display().to_string())
 }

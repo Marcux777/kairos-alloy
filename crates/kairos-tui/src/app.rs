@@ -1,5 +1,5 @@
 use crate::logging::LogStore;
-use crate::tasks::{TaskEvent, TaskKind, TaskRunner, TradeSample};
+use crate::tasks::{StreamStatusSample, TaskEvent, TaskKind, TaskRunner, TradeSample};
 use crossterm::event::{Event as CtEvent, KeyCode, KeyEvent, KeyModifiers};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -96,6 +96,8 @@ pub struct App {
     pub validate_strict: bool,
     pub require_validate_before_run: bool,
     pub last_validate_ok: Option<bool>,
+    pub paper_realtime: bool,
+    pub stream_status: Option<StreamStatusSample>,
 
     pub logs: Arc<parking_lot::Mutex<LogStore>>,
     pub log_scroll: usize,
@@ -146,6 +148,8 @@ impl App {
             validate_strict: false,
             require_validate_before_run: false,
             last_validate_ok: None,
+            paper_realtime: false,
+            stream_status: None,
             logs,
             log_scroll: 0,
             price_series: VecDeque::new(),
@@ -221,6 +225,11 @@ impl App {
                 self.dirty = true;
                 Ok(false)
             }
+            TaskEvent::StreamStatus(status) => {
+                self.stream_status = Some(status);
+                self.dirty = true;
+                Ok(false)
+            }
             TaskEvent::TaskFinished(result) => {
                 if self.status.kind == Some(TaskKind::Validate { strict: true })
                     || self.status.kind == Some(TaskKind::Validate { strict: false })
@@ -241,6 +250,7 @@ impl App {
                         }
                     }
                 });
+                self.stream_status = None;
                 self.dirty = true;
                 Ok(false)
             }
@@ -474,6 +484,18 @@ impl App {
                 self.require_validate_before_run = !self.require_validate_before_run;
                 self.dirty = true;
             }
+            KeyCode::Char('t') => {
+                if self.backtest_tab == BacktestTab::Paper && !self.status.running {
+                    self.paper_realtime = !self.paper_realtime;
+                    self.info_message = Some(if self.paper_realtime {
+                        "paper mode: realtime on".to_string()
+                    } else {
+                        "paper mode: replay on".to_string()
+                    });
+                    self.info_expires_at = Some(Instant::now() + std::time::Duration::from_secs(2));
+                    self.dirty = true;
+                }
+            }
             KeyCode::Char('r') => {
                 self.start_selected_task()?;
                 self.dirty = true;
@@ -615,11 +637,20 @@ impl App {
                 strict: self.validate_strict,
             },
             BacktestTab::Backtest => TaskKind::Backtest,
-            BacktestTab::Paper => TaskKind::Paper,
+            BacktestTab::Paper => {
+                if self.paper_realtime {
+                    TaskKind::PaperRealtime
+                } else {
+                    TaskKind::Paper
+                }
+            }
         };
 
         if self.require_validate_before_run
-            && matches!(kind, TaskKind::Backtest | TaskKind::Paper)
+            && matches!(
+                kind,
+                TaskKind::Backtest | TaskKind::Paper | TaskKind::PaperRealtime
+            )
             && self.last_validate_ok != Some(true)
         {
             self.last_error =
@@ -641,7 +672,11 @@ impl App {
         self.trades.clear();
         self.trade_scroll = 0;
         self.paused = false;
-        if matches!(kind, TaskKind::Backtest | TaskKind::Paper) {
+        self.stream_status = None;
+        if matches!(
+            kind,
+            TaskKind::Backtest | TaskKind::Paper | TaskKind::PaperRealtime
+        ) {
             self.active_view = ViewId::Monitor;
         }
 

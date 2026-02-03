@@ -261,6 +261,12 @@ fn draw_backtest(frame: &mut Frame, area: Rect, app: &mut App) {
             if app.validate_strict { "on" } else { "off" }
         )));
     }
+    if app.backtest_tab == BacktestTab::Paper {
+        lines.push(Line::from(format!(
+            "paper realtime: {} (toggle: t)",
+            if app.paper_realtime { "on" } else { "off" }
+        )));
+    }
     lines.push(Line::from(format!(
         "require validate: {} (toggle: v)",
         if app.require_validate_before_run {
@@ -270,9 +276,33 @@ fn draw_backtest(frame: &mut Frame, area: Rect, app: &mut App) {
         }
     )));
 
+    if let (Some(kind), Some(status)) = (app.status.kind, app.stream_status.as_ref()) {
+        if kind == crate::tasks::TaskKind::PaperRealtime {
+            let conn = if status.connected {
+                "connected"
+            } else {
+                "reconnecting"
+            };
+            lines.push(Line::from(format!(
+                "ws: {conn} | reconnects: {} | last_ts: {:?}",
+                status.reconnects, status.last_event_timestamp
+            )));
+            lines.push(Line::from(format!(
+                "ws quality: out_of_order={} invalid={}",
+                status.out_of_order_events, status.invalid_events
+            )));
+            if let Some(err) = &status.last_error {
+                lines.push(Line::from(Span::styled(
+                    format!("ws last_error: {err}"),
+                    Style::default().fg(Color::Red),
+                )));
+            }
+        }
+    }
+
     lines.push(Line::from(""));
     lines.push(Line::from(
-        "keys: r run | p pause/resume | x stop | v gate | Esc menu | ←/→ switch tab",
+        "keys: r run | p pause/resume | x stop | v gate | t paper mode | Esc menu | ←/→ switch tab",
     ));
 
     if let Some(last) = &app.status.last_result {
@@ -415,6 +445,15 @@ fn draw_monitor(frame: &mut Frame, area: Rect, app: &mut App) {
     } else if app.paused {
         title.push_str(" (PAUSED)");
     }
+    if let (Some(kind), Some(status)) = (app.status.kind, app.stream_status.as_ref()) {
+        if kind == crate::tasks::TaskKind::PaperRealtime {
+            title.push_str(if status.connected {
+                " (WS: connected)"
+            } else {
+                " (WS: reconnecting)"
+            });
+        }
+    }
     frame.render_widget(
         Paragraph::new(lines)
             .block(Block::default().title(title).borders(Borders::ALL))
@@ -515,6 +554,7 @@ fn task_kind_label(kind: crate::tasks::TaskKind) -> &'static str {
         crate::tasks::TaskKind::Validate { .. } => "validate",
         crate::tasks::TaskKind::Backtest => "backtest",
         crate::tasks::TaskKind::Paper => "paper",
+        crate::tasks::TaskKind::PaperRealtime => "paper(realtime)",
     }
 }
 

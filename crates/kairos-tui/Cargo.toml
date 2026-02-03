@@ -32,3 +32,4 @@ metrics-exporter-prometheus = { version = "0.16", optional = true }
 [features]
 default = ["prometheus"]
 prometheus = ["dep:metrics-exporter-prometheus"]
+realtime-kucoin = ["kairos-infrastructure/realtime-kucoin"]
