@@ -5,6 +5,7 @@ pub use kairos_domain::services::agent::{
 use kairos_domain::value_objects::action::Action;
 use kairos_domain::value_objects::action_type::ActionType;
 use reqwest::blocking::Client;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::StatusCode;
 use serde::Serialize;
 use std::time::Duration;
@@ -37,6 +38,7 @@ pub struct AgentClient {
     pub feature_version: String,
     pub retries: u32,
     pub fallback_action: ActionType,
+    extra_headers: HeaderMap,
     client: Client,
 }
 
@@ -49,6 +51,35 @@ impl AgentClient {
         retries: u32,
         fallback_action: ActionType,
     ) -> Result<Self, String> {
+        Self::new_with_headers(
+            url,
+            timeout_ms,
+            api_version,
+            feature_version,
+            retries,
+            fallback_action,
+            Vec::new(),
+        )
+    }
+
+    pub fn new_with_headers(
+        url: String,
+        timeout_ms: u64,
+        api_version: String,
+        feature_version: String,
+        retries: u32,
+        fallback_action: ActionType,
+        extra_headers: Vec<(String, String)>,
+    ) -> Result<Self, String> {
+        let mut headers = HeaderMap::new();
+        for (name, value) in extra_headers {
+            let header_name = HeaderName::from_bytes(name.as_bytes())
+                .map_err(|_| format!("invalid header name: {name}"))?;
+            let header_value =
+                HeaderValue::from_str(&value).map_err(|_| format!("invalid header value for {name}"))?;
+            headers.insert(header_name, header_value);
+        }
+
         let client = Client::builder()
             .timeout(Duration::from_millis(timeout_ms))
             .pool_idle_timeout(Duration::from_secs(90))
@@ -61,6 +92,7 @@ impl AgentClient {
             feature_version,
             retries,
             fallback_action,
+            extra_headers: headers,
             client,
         })
     }
@@ -106,7 +138,11 @@ impl AgentClient {
             metrics::counter!("kairos.infra.agent.requests_total", "endpoint" => "act")
                 .increment(1);
             let attempt_start = Instant::now();
-            let response = self.client.post(&endpoint).json(request).send();
+            let mut builder = self.client.post(&endpoint);
+            if !self.extra_headers.is_empty() {
+                builder = builder.headers(self.extra_headers.clone());
+            }
+            let response = builder.json(request).send();
             match response {
                 Ok(resp) => {
                     last_status = Some(resp.status().as_u16());
@@ -281,7 +317,11 @@ impl AgentClient {
             metrics::counter!("kairos.infra.agent.requests_total", "endpoint" => "act_batch")
                 .increment(1);
             let attempt_start = Instant::now();
-            let response = self.client.post(&endpoint).json(batch).send();
+            let mut builder = self.client.post(&endpoint);
+            if !self.extra_headers.is_empty() {
+                builder = builder.headers(self.extra_headers.clone());
+            }
+            let response = builder.json(batch).send();
             match response {
                 Ok(resp) => {
                     last_status = Some(resp.status().as_u16());

@@ -1,8 +1,10 @@
 use crate::logging::LogStore;
-use crate::tasks::{StreamStatusSample, TaskEvent, TaskKind, TaskRunner, TradeSample};
+use crate::tasks::{AgentLlmRuntime, StreamStatusSample, TaskEvent, TaskKind, TaskRunner, TradeSample};
 use crossterm::event::{Event as CtEvent, KeyCode, KeyEvent, KeyModifiers};
 use std::collections::VecDeque;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -91,6 +93,10 @@ pub enum QuickEditField {
     Symbol,
     Timeframe,
     InitialCapital,
+    LlmProvider,
+    LlmModel,
+    LlmApiKey,
+    LlmManagedAgent,
 }
 
 impl QuickEditField {
@@ -99,16 +105,24 @@ impl QuickEditField {
             Self::RunId => Self::Symbol,
             Self::Symbol => Self::Timeframe,
             Self::Timeframe => Self::InitialCapital,
-            Self::InitialCapital => Self::RunId,
+            Self::InitialCapital => Self::LlmProvider,
+            Self::LlmProvider => Self::LlmModel,
+            Self::LlmModel => Self::LlmApiKey,
+            Self::LlmApiKey => Self::LlmManagedAgent,
+            Self::LlmManagedAgent => Self::RunId,
         }
     }
 
     fn prev(self) -> Self {
         match self {
-            Self::RunId => Self::InitialCapital,
+            Self::RunId => Self::LlmManagedAgent,
             Self::Symbol => Self::RunId,
             Self::Timeframe => Self::Symbol,
             Self::InitialCapital => Self::Timeframe,
+            Self::LlmProvider => Self::InitialCapital,
+            Self::LlmModel => Self::LlmProvider,
+            Self::LlmApiKey => Self::LlmModel,
+            Self::LlmManagedAgent => Self::LlmApiKey,
         }
     }
 }
@@ -119,6 +133,10 @@ pub struct QuickEditState {
     pub symbol: TextInput,
     pub timeframe: TextInput,
     pub initial_capital: TextInput,
+    pub llm_provider: TextInput,
+    pub llm_model: TextInput,
+    pub llm_api_key: TextInput,
+    pub llm_managed_agent: TextInput,
 }
 
 impl QuickEditState {
@@ -129,6 +147,10 @@ impl QuickEditState {
             symbol: TextInput::new(String::new()),
             timeframe: TextInput::new(String::new()),
             initial_capital: TextInput::new(String::new()),
+            llm_provider: TextInput::new("none".to_string()),
+            llm_model: TextInput::new(String::new()),
+            llm_api_key: TextInput::new(String::new()),
+            llm_managed_agent: TextInput::new("off".to_string()),
         }
     }
 
@@ -145,6 +167,10 @@ impl QuickEditState {
             QuickEditField::Symbol => &mut self.symbol,
             QuickEditField::Timeframe => &mut self.timeframe,
             QuickEditField::InitialCapital => &mut self.initial_capital,
+            QuickEditField::LlmProvider => &mut self.llm_provider,
+            QuickEditField::LlmModel => &mut self.llm_model,
+            QuickEditField::LlmApiKey => &mut self.llm_api_key,
+            QuickEditField::LlmManagedAgent => &mut self.llm_managed_agent,
         }
     }
 
@@ -154,6 +180,10 @@ impl QuickEditState {
             QuickEditField::Symbol => &self.symbol.value,
             QuickEditField::Timeframe => &self.timeframe.value,
             QuickEditField::InitialCapital => &self.initial_capital.value,
+            QuickEditField::LlmProvider => &self.llm_provider.value,
+            QuickEditField::LlmModel => &self.llm_model.value,
+            QuickEditField::LlmApiKey => &self.llm_api_key.value,
+            QuickEditField::LlmManagedAgent => &self.llm_managed_agent.value,
         }
     }
 }
@@ -215,6 +245,8 @@ pub struct App {
     pub last_error: Option<String>,
     pub info_message: Option<String>,
     info_expires_at: Option<Instant>,
+
+    managed_llm_agent: Option<Child>,
 }
 
 impl App {
@@ -276,6 +308,7 @@ impl App {
             last_error: None,
             info_message: None,
             info_expires_at: None,
+            managed_llm_agent: None,
         }
     }
 
@@ -902,6 +935,47 @@ impl App {
         let raw = self.quick_edit.selected_value().trim();
         let field = self.quick_edit.selected;
 
+        if matches!(
+            field,
+            QuickEditField::LlmProvider
+                | QuickEditField::LlmModel
+                | QuickEditField::LlmApiKey
+                | QuickEditField::LlmManagedAgent
+        ) {
+            if field == QuickEditField::LlmProvider {
+                let v = raw.to_lowercase();
+                if !(v.is_empty() || v == "none" || v == "gemini" || v == "openai") {
+                    self.set_error_and_clear_info("llm_provider must be one of: none|gemini|openai");
+                    return;
+                }
+                self.quick_edit.llm_provider =
+                    TextInput::new(if v.is_empty() { "none".to_string() } else { v });
+            } else if field == QuickEditField::LlmModel {
+                self.quick_edit.llm_model = TextInput::new(raw.to_string());
+            } else if field == QuickEditField::LlmApiKey {
+                self.quick_edit.llm_api_key = TextInput::new(raw.to_string());
+            } else if field == QuickEditField::LlmManagedAgent {
+                let v = raw.to_lowercase();
+                let norm = match v.as_str() {
+                    "" => "off",
+                    "off" | "false" | "0" => "off",
+                    "on" | "true" | "1" => "on",
+                    _ => {
+                        self.set_error_and_clear_info(
+                            "llm_managed_agent must be one of: on|off|true|false|1|0",
+                        );
+                        return;
+                    }
+                };
+                self.quick_edit.llm_managed_agent = TextInput::new(norm.to_string());
+            }
+
+            self.last_error = None;
+            self.info_message = Some("LLM runtime setting updated (not saved to config)".to_string());
+            self.info_expires_at = Some(Instant::now() + std::time::Duration::from_secs(2));
+            return;
+        }
+
         let mut next = current;
         let result: Result<(), String> = match field {
             QuickEditField::RunId => {
@@ -946,6 +1020,10 @@ impl App {
                     Ok(())
                 }
             }
+            QuickEditField::LlmProvider | QuickEditField::LlmModel | QuickEditField::LlmApiKey => {
+                unreachable!("handled above")
+            }
+            QuickEditField::LlmManagedAgent => unreachable!("handled above"),
         };
 
         if let Err(err) = result {
@@ -1063,6 +1141,44 @@ impl App {
             return Ok(());
         }
 
+        let provider = self.quick_edit.llm_provider.value.trim().to_lowercase();
+        let provider = if provider.is_empty() || provider == "none" {
+            None
+        } else {
+            Some(provider)
+        };
+        let model = self.quick_edit.llm_model.value.trim().to_string();
+        let model = (!model.is_empty()).then_some(model);
+        let api_key = self.quick_edit.llm_api_key.value.trim().to_string();
+        let api_key = (!api_key.is_empty()).then_some(api_key);
+        let agent_llm = if provider.is_some() || model.is_some() || api_key.is_some() {
+            Some(AgentLlmRuntime {
+                provider,
+                model,
+                api_key,
+            })
+        } else {
+            None
+        };
+
+        let managed = self
+            .quick_edit
+            .llm_managed_agent
+            .value
+            .trim()
+            .eq_ignore_ascii_case("on");
+        if managed
+            && matches!(
+                kind,
+                TaskKind::Backtest | TaskKind::Paper | TaskKind::PaperRealtime
+            )
+        {
+            if let Err(err) = self.ensure_managed_llm_agent(cfg.as_ref(), agent_llm.as_ref()) {
+                self.last_error = Some(err);
+                return Ok(());
+            }
+        }
+
         self.status.running = true;
         self.paused = false;
         self.cancel_requested = false;
@@ -1085,8 +1201,85 @@ impl App {
             self.active_view = ViewId::Monitor;
         }
 
-        self.task_runner.start(kind, cfg, cfg_toml);
+        self.task_runner.start(kind, cfg, cfg_toml, agent_llm);
         Ok(())
+    }
+
+    fn ensure_managed_llm_agent(
+        &mut self,
+        cfg: &kairos_application::config::Config,
+        agent_llm: Option<&AgentLlmRuntime>,
+    ) -> Result<(), String> {
+        let Some(agent_llm) = agent_llm else {
+            return Ok(());
+        };
+        let Some(provider) = agent_llm.provider.as_deref() else {
+            return Ok(());
+        };
+        let provider = provider.trim();
+        if provider.is_empty() || provider.eq_ignore_ascii_case("none") {
+            return Ok(());
+        }
+
+        let (host, port) = parse_local_http_host_port(cfg.agent.url.as_str())?;
+
+        if port_is_open(&host, port) {
+            return Ok(());
+        }
+
+        if let Some(child) = self.managed_llm_agent.as_mut() {
+            if child.try_wait().ok().flatten().is_some() {
+                self.managed_llm_agent = None;
+            } else if !port_is_open(&host, port) {
+                let _ = child.kill();
+                let _ = child.wait();
+                self.managed_llm_agent = None;
+            }
+        }
+
+        if port_is_open(&host, port) {
+            return Ok(());
+        }
+
+        let script = PathBuf::from("tools/agent_llm.py");
+        if !script.exists() {
+            return Err("managed agent requires tools/agent_llm.py (dev checkout). Run the agent yourself and set agent.url.".to_string());
+        }
+
+        let mut cmd = Command::new("python3");
+        cmd.arg("tools/agent_llm.py")
+            .arg("--llm-mode")
+            .arg("live")
+            .arg("--provider")
+            .arg(provider)
+            .arg("--host")
+            .arg(host.as_str())
+            .arg("--port")
+            .arg(port.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if let Some(model) = agent_llm.model.as_deref() {
+            let m = model.trim();
+            if !m.is_empty() {
+                cmd.arg("--model").arg(m);
+            }
+        }
+
+        let child = cmd
+            .spawn()
+            .map_err(|err| format!("failed to spawn managed agent: {err}"))?;
+        self.managed_llm_agent = Some(child);
+
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_secs(2) {
+            if port_is_open(&host, port) {
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        Err("managed LLM agent failed to start (port not open)".to_string())
     }
 
     pub fn spinner_char(&self) -> char {
@@ -1097,6 +1290,70 @@ impl App {
             _ => '\\',
         }
     }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        if let Some(child) = self.managed_llm_agent.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+fn parse_local_http_host_port(url: &str) -> Result<(String, u16), String> {
+    let url = url.trim();
+    let authority = url
+        .strip_prefix("http://")
+        .ok_or_else(|| "managed LLM agent requires agent.url starting with http://".to_string())?;
+    let authority = authority.split('/').next().unwrap_or(authority);
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+
+    let (host, port_str) = if let Some(rest) = authority.strip_prefix('[') {
+        let (host, rest) = rest
+            .split_once(']')
+            .ok_or_else(|| "invalid IPv6 host in agent.url".to_string())?;
+        let port_str = rest
+            .strip_prefix(':')
+            .ok_or_else(|| "agent.url must include an explicit :port".to_string())?;
+        (host.to_string(), port_str)
+    } else {
+        let (host, port_str) = authority
+            .rsplit_once(':')
+            .ok_or_else(|| "agent.url must include an explicit :port".to_string())?;
+        (host.to_string(), port_str)
+    };
+
+    let host_trimmed = host.trim().to_lowercase();
+    let host = match host_trimmed.as_str() {
+        "localhost" | "127.0.0.1" | "::1" => host_trimmed,
+        "0.0.0.0" => "127.0.0.1".to_string(),
+        _ => {
+            return Err(
+                "managed LLM agent only supports localhost URLs (localhost/127.0.0.1)".to_string(),
+            );
+        }
+    };
+
+    let port: u16 = port_str
+        .trim()
+        .parse()
+        .map_err(|_| "invalid port in agent.url".to_string())?;
+
+    Ok((host, port))
+}
+
+fn port_is_open(host: &str, port: u16) -> bool {
+    let addr = (host, port);
+    let Ok(addrs) = addr.to_socket_addrs() else {
+        return false;
+    };
+    for socket_addr in addrs {
+        if TcpStream::connect_timeout(&socket_addr, std::time::Duration::from_millis(200)).is_ok() {
+            return true;
+        }
+    }
+    false
 }
 
 fn recent_store_path() -> Option<PathBuf> {

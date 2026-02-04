@@ -38,3 +38,13 @@ Defaults:
 
 Use `--cache-mode record_replay` (default). The first run records decisions; subsequent runs replay the same
 responses for identical requests, making backtests deterministic and avoiding repeated LLM calls.
+
+## TUI API key entry (headers)
+
+If you enable the agent in `--llm-mode live`, it can also read provider/model/API key from request headers:
+
+- `X-KAIROS-LLM-PROVIDER`: `gemini` | `openai`
+- `X-KAIROS-LLM-MODEL`: model id (optional)
+- `X-KAIROS-LLM-API-KEY`: API key (optional; overrides env)
+
+This allows the Rust TUI to send the user's key at runtime without storing it in `config_snapshot.toml`.

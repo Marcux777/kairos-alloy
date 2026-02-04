@@ -174,26 +174,65 @@ fn draw_setup(frame: &mut Frame, area: Rect, app: &mut App) {
         lines.push(Line::from("Fields (Enter applies selected):"));
         lines.push(Line::from(""));
 
-        let items: Vec<(QuickEditField, &str, &str)> = vec![
+        let masked_key = {
+            let raw = app.quick_edit.llm_api_key.value.as_str();
+            if raw.trim().is_empty() {
+                "<empty>".to_string()
+            } else {
+                let t = raw.trim();
+                let last4 = t.chars().rev().take(4).collect::<Vec<_>>();
+                let last4 = last4.into_iter().rev().collect::<String>();
+                format!("************{last4} (len={})", t.chars().count())
+            }
+        };
+
+        let llm_provider_val = app.quick_edit.llm_provider.value.as_str();
+        let llm_model_val = if app.quick_edit.llm_model.value.trim().is_empty() {
+            "<default>".to_string()
+        } else {
+            app.quick_edit.llm_model.value.clone()
+        };
+
+        let items: Vec<(QuickEditField, &str, String)> = vec![
             (
                 QuickEditField::RunId,
                 "run_id",
-                &app.quick_edit.run_id.value,
+                app.quick_edit.run_id.value.clone(),
             ),
             (
                 QuickEditField::Symbol,
                 "symbol",
-                &app.quick_edit.symbol.value,
+                app.quick_edit.symbol.value.clone(),
             ),
             (
                 QuickEditField::Timeframe,
                 "timeframe",
-                &app.quick_edit.timeframe.value,
+                app.quick_edit.timeframe.value.clone(),
             ),
             (
                 QuickEditField::InitialCapital,
                 "initial_capital",
-                &app.quick_edit.initial_capital.value,
+                app.quick_edit.initial_capital.value.clone(),
+            ),
+            (
+                QuickEditField::LlmProvider,
+                "llm_provider (runtime)",
+                llm_provider_val.to_string(),
+            ),
+            (
+                QuickEditField::LlmModel,
+                "llm_model (runtime)",
+                llm_model_val,
+            ),
+            (
+                QuickEditField::LlmApiKey,
+                "llm_api_key (runtime)",
+                masked_key,
+            ),
+            (
+                QuickEditField::LlmManagedAgent,
+                "llm_managed_agent (runtime)",
+                app.quick_edit.llm_managed_agent.value.clone(),
             ),
         ];
 
@@ -268,6 +307,8 @@ fn draw_setup(frame: &mut Frame, area: Rect, app: &mut App) {
         Line::from("  ↑/↓: select (list/edit)"),
         Line::from("  i/l/e: focus input/list/edit"),
         Line::from("  g/F5: refresh list"),
+        Line::from("  Note: llm_* fields are runtime-only (not saved to config_snapshot)"),
+        Line::from("  Note: llm_managed_agent=on spawns python agent (dev checkout only)"),
         Line::from("  Esc: back to menu"),
     ];
     frame.render_widget(

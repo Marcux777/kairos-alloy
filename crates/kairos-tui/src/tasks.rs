@@ -20,6 +20,13 @@ pub enum TaskKind {
     PaperRealtime,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct AgentLlmRuntime {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub api_key: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct TradeSample {
     pub bar_index: u64,
@@ -160,6 +167,7 @@ impl TaskRunner {
         kind: TaskKind,
         config: Arc<kairos_application::config::Config>,
         config_toml: String,
+        agent_llm: Option<AgentLlmRuntime>,
     ) {
         let inner = self.inner.clone();
         let tx = inner.tx.clone();
@@ -175,7 +183,14 @@ impl TaskRunner {
                 *slot = control.clone();
             }
 
-            let result = run_task(kind, config.as_ref(), &config_toml, &tx, control.as_ref());
+            let result = run_task(
+                kind,
+                config.as_ref(),
+                &config_toml,
+                &tx,
+                control.as_ref(),
+                agent_llm.as_ref(),
+            );
             {
                 let mut slot = inner.control.lock();
                 *slot = None;
@@ -208,12 +223,13 @@ fn run_task(
     config_toml: &str,
     tx: &tokio::sync::mpsc::UnboundedSender<TaskEvent>,
     control: Option<&TaskControl>,
+    agent_llm: Option<&AgentLlmRuntime>,
 ) -> Result<String, String> {
     match kind {
         TaskKind::Validate { strict } => run_validate(config, strict),
-        TaskKind::Backtest => run_backtest(config, config_toml, tx, control),
-        TaskKind::Paper => run_paper(config, config_toml, tx, control),
-        TaskKind::PaperRealtime => run_paper_realtime(config, config_toml, tx, control),
+        TaskKind::Backtest => run_backtest(config, config_toml, tx, control, agent_llm),
+        TaskKind::Paper => run_paper(config, config_toml, tx, control, agent_llm),
+        TaskKind::PaperRealtime => run_paper_realtime(config, config_toml, tx, control, agent_llm),
     }
 }
 
@@ -243,17 +259,52 @@ fn build_sentiment_repo() -> Box<dyn SentimentRepository> {
 
 fn build_remote_agent(
     config: &kairos_application::config::Config,
+    agent_llm: Option<&AgentLlmRuntime>,
 ) -> Result<Option<Box<dyn AgentPort>>, String> {
     match config.agent.mode {
         kairos_application::config::AgentMode::Remote => {
-            let agent = InfraAgentClient::new(
-                config.agent.url.clone(),
-                config.agent.timeout_ms,
-                config.agent.api_version.clone(),
-                config.agent.feature_version.clone(),
-                config.agent.retries,
-                config.agent.fallback_action,
-            )
+            let mut headers: Vec<(String, String)> = Vec::new();
+            if let Some(llm) = agent_llm {
+                if let Some(provider) = llm.provider.as_deref() {
+                    let v = provider.trim();
+                    if !v.is_empty() && !v.eq_ignore_ascii_case("none") {
+                        headers.push(("X-KAIROS-LLM-PROVIDER".to_string(), v.to_string()));
+                    }
+                }
+                if let Some(model) = llm.model.as_deref() {
+                    let v = model.trim();
+                    if !v.is_empty() {
+                        headers.push(("X-KAIROS-LLM-MODEL".to_string(), v.to_string()));
+                    }
+                }
+                if let Some(api_key) = llm.api_key.as_deref() {
+                    let v = api_key.trim();
+                    if !v.is_empty() {
+                        headers.push(("X-KAIROS-LLM-API-KEY".to_string(), v.to_string()));
+                    }
+                }
+            }
+
+            let agent = if headers.is_empty() {
+                InfraAgentClient::new(
+                    config.agent.url.clone(),
+                    config.agent.timeout_ms,
+                    config.agent.api_version.clone(),
+                    config.agent.feature_version.clone(),
+                    config.agent.retries,
+                    config.agent.fallback_action,
+                )
+            } else {
+                InfraAgentClient::new_with_headers(
+                    config.agent.url.clone(),
+                    config.agent.timeout_ms,
+                    config.agent.api_version.clone(),
+                    config.agent.feature_version.clone(),
+                    config.agent.retries,
+                    config.agent.fallback_action,
+                    headers,
+                )
+            }
             .map_err(|err| {
                 format!(
                     "failed to init remote agent client (url={}): {err}",
@@ -288,13 +339,14 @@ fn run_backtest(
     config_toml: &str,
     tx: &tokio::sync::mpsc::UnboundedSender<TaskEvent>,
     control: Option<&TaskControl>,
+    agent_llm: Option<&AgentLlmRuntime>,
 ) -> Result<String, String> {
     use kairos_domain::services::engine::backtest::BarProgress;
 
     let market_data = build_market_data_repo(config)?;
     let sentiment_repo = build_sentiment_repo();
     let artifacts = FilesystemArtifactWriter::new();
-    let remote_agent = build_remote_agent(config)?;
+    let remote_agent = build_remote_agent(config, agent_llm)?;
 
     let mut last: Option<(f64, f64, f64)> = None;
     let mut last_sent_x: Option<f64> = None;
@@ -377,13 +429,14 @@ fn run_paper(
     config_toml: &str,
     tx: &tokio::sync::mpsc::UnboundedSender<TaskEvent>,
     control: Option<&TaskControl>,
+    agent_llm: Option<&AgentLlmRuntime>,
 ) -> Result<String, String> {
     use kairos_domain::services::engine::backtest::BarProgress;
 
     let market_data = build_market_data_repo(config)?;
     let sentiment_repo = build_sentiment_repo();
     let artifacts = FilesystemArtifactWriter::new();
-    let remote_agent = build_remote_agent(config)?;
+    let remote_agent = build_remote_agent(config, agent_llm)?;
 
     let mut last: Option<(f64, f64, f64)> = None;
     let mut last_sent_x: Option<f64> = None;
@@ -461,6 +514,7 @@ fn run_paper_realtime(
     config_toml: &str,
     tx: &tokio::sync::mpsc::UnboundedSender<TaskEvent>,
     control: Option<&TaskControl>,
+    agent_llm: Option<&AgentLlmRuntime>,
 ) -> Result<String, String> {
     use kairos_domain::repositories::market_stream::MarketStream;
 
@@ -473,7 +527,7 @@ fn run_paper_realtime(
 
     let sentiment_repo = build_sentiment_repo();
     let artifacts = FilesystemArtifactWriter::new();
-    let remote_agent = build_remote_agent(config)?;
+    let remote_agent = build_remote_agent(config, agent_llm)?;
 
     let mut connect_stream = || -> Result<Box<dyn MarketStream>, String> {
         #[cfg(feature = "realtime-kucoin")]

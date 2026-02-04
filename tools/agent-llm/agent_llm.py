@@ -15,6 +15,9 @@ from typing import Optional, Tuple, Dict, Any
 
 PROMPT_VERSION = "v1"
 MAX_REASON_CHARS = 2000
+HDR_LLM_PROVIDER = "X-KAIROS-LLM-PROVIDER"
+HDR_LLM_API_KEY = "X-KAIROS-LLM-API-KEY"
+HDR_LLM_MODEL = "X-KAIROS-LLM-MODEL"
 
 
 def _utc_now_iso() -> str:
@@ -420,6 +423,9 @@ class Handler(BaseHTTPRequestHandler):
 
         server = self.server  # type: ignore[assignment]
         latency_ms = int((time.perf_counter() - start) * 1000.0)
+        llm_provider = self.headers.get(HDR_LLM_PROVIDER)
+        llm_api_key = self.headers.get(HDR_LLM_API_KEY)
+        llm_model = self.headers.get(HDR_LLM_MODEL)
 
         if self.path == "/v1/act_batch":
             items = request.get("items", [])
@@ -433,13 +439,31 @@ class Handler(BaseHTTPRequestHandler):
                     continue
                 # Evaluate only the last item (most recent); earlier items are holds.
                 if idx == len(items) - 1:
-                    out_items.append(server.act_single(item, latency_ms=latency_ms))
+                    out_items.append(
+                        server.act_single(
+                            item,
+                            latency_ms=latency_ms,
+                            llm_provider=llm_provider,
+                            llm_api_key=llm_api_key,
+                            llm_model=llm_model,
+                        )
+                    )
                 else:
                     out_items.append(server.hold_response(reason="batch_hold"))
             _json_response(self, 200, {"items": out_items})
             return
 
-        _json_response(self, 200, server.act_single(request, latency_ms=latency_ms))
+        _json_response(
+            self,
+            200,
+            server.act_single(
+                request,
+                latency_ms=latency_ms,
+                llm_provider=llm_provider,
+                llm_api_key=llm_api_key,
+                llm_model=llm_model,
+            ),
+        )
 
     def log_message(self, fmt, *args):  # noqa: N802
         return
@@ -453,35 +477,7 @@ class Server(ThreadingHTTPServer):
         self._caches = {}  # run_id -> Cache
         self._rng = random.Random(0)
 
-        http_timeout_s = float(os.environ.get("KAIROS_LLM_HTTP_TIMEOUT_S", "10"))
-        self._provider = None
-        if args.llm_mode == "live":
-            if args.provider == "gemini":
-                api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-                if not api_key:
-                    raise SystemExit("GEMINI_API_KEY is required for --provider gemini --llm-mode live")
-                self._provider = GeminiClient(
-                    api_key=api_key,
-                    model=args.model,
-                    temperature=float(args.temperature),
-                    max_output_tokens=int(args.max_output_tokens),
-                    http_timeout_s=http_timeout_s,
-                )
-            elif args.provider == "openai":
-                api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-                if not api_key:
-                    raise SystemExit("OPENAI_API_KEY is required for --provider openai --llm-mode live")
-                self._provider = OpenAIClient(
-                    api_key=api_key,
-                    model=args.model,
-                    temperature=float(args.temperature),
-                    max_output_tokens=int(args.max_output_tokens),
-                    http_timeout_s=http_timeout_s,
-                    base_url=args.openai_base_url,
-                    json_mode=bool(args.openai_json_mode),
-                )
-            else:
-                raise SystemExit(f"unsupported provider: {args.provider}")
+        self.http_timeout_s = float(os.environ.get("KAIROS_LLM_HTTP_TIMEOUT_S", "10"))
 
     def _cache_for_run(self, run_id: str) -> Cache:
         cache = self._caches.get(run_id)
@@ -511,12 +507,12 @@ class Server(ThreadingHTTPServer):
         self._counters[key] = c + 1
         return (c % n) == 0
 
-    def _request_hash(self, request: dict) -> str:
+    def _request_hash(self, request: dict, provider: str, model: str) -> str:
         envelope = {
             "prompt_version": PROMPT_VERSION,
             "agent": {
-                "provider": self.args.provider,
-                "model": self.args.model,
+                "provider": provider,
+                "model": model,
                 "temperature": float(self.args.temperature),
                 "max_output_tokens": int(self.args.max_output_tokens),
                 "eval_every_n_bars": int(self.args.eval_every_n_bars),
@@ -539,7 +535,55 @@ class Server(ThreadingHTTPServer):
             return {"action_type": "BUY", "size": 0.25, "confidence": 0.55, "reason": "mock: buy"}
         return {"action_type": "HOLD", "size": 0.0, "confidence": 0.55, "reason": "mock: hold"}
 
-    def act_single(self, request: dict, latency_ms: int) -> dict:
+    def _resolve_llm_settings(
+        self,
+        llm_provider: Optional[str],
+        llm_model: Optional[str],
+        llm_api_key: Optional[str],
+    ) -> Tuple[str, str, Optional[str]]:
+        provider = (llm_provider or self.args.provider or "").strip().lower()
+        if provider not in ("gemini", "openai"):
+            provider = (self.args.provider or "gemini").strip().lower()
+        model = (llm_model or self.args.model or "").strip()
+        if not model:
+            model = self.args.model
+        api_key = (llm_api_key or "").strip()
+        if not api_key:
+            if provider == "gemini":
+                api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+            elif provider == "openai":
+                api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        return provider, model, (api_key if api_key else None)
+
+    def _make_provider(self, provider: str, model: str, api_key: str):
+        if provider == "gemini":
+            return GeminiClient(
+                api_key=api_key,
+                model=model,
+                temperature=float(self.args.temperature),
+                max_output_tokens=int(self.args.max_output_tokens),
+                http_timeout_s=self.http_timeout_s,
+            )
+        if provider == "openai":
+            return OpenAIClient(
+                api_key=api_key,
+                model=model,
+                temperature=float(self.args.temperature),
+                max_output_tokens=int(self.args.max_output_tokens),
+                http_timeout_s=self.http_timeout_s,
+                base_url=self.args.openai_base_url,
+                json_mode=bool(self.args.openai_json_mode),
+            )
+        raise ValueError(f"unsupported provider: {provider}")
+
+    def act_single(
+        self,
+        request: dict,
+        latency_ms: int,
+        llm_provider: Optional[str] = None,
+        llm_api_key: Optional[str] = None,
+        llm_model: Optional[str] = None,
+    ) -> dict:
         run_id = str(request.get("run_id") or "unknown")
         symbol = str(request.get("symbol") or "unknown")
         timeframe = str(request.get("timeframe") or "unknown")
@@ -548,7 +592,8 @@ class Server(ThreadingHTTPServer):
         if not self._should_eval(key):
             return self.hold_response(reason="cadence_hold")
 
-        req_hash = self._request_hash(request)
+        provider, model, api_key = self._resolve_llm_settings(llm_provider, llm_model, llm_api_key)
+        req_hash = self._request_hash(request, provider=provider, model=model)
         cache = self._cache_for_run(run_id)
         cached = cache.get(req_hash) if self.args.cache_mode in ("record_replay", "replay") else None
         if isinstance(cached, dict):
@@ -565,23 +610,32 @@ class Server(ThreadingHTTPServer):
             llm_latency_ms = int((time.perf_counter() - llm_start) * 1000.0)
             model_version = "mock-0.1"
         else:
-            obs = request.get("observation", [])
-            if not isinstance(obs, list):
-                obs = []
-            named = _name_observation(obs, self.args)
-            prompt = _build_prompt(request, named, self.args)
-            try:
-                assert self._provider is not None
-                text, llm_latency_ms = self._provider.generate_json(prompt)
-                obj = _extract_json_object(text) or {}
-                decision = obj
-                model_version = self.args.model
-            except urllib.error.HTTPError as e:
-                decision = {"action_type": "HOLD", "size": 0.0, "confidence": None, "reason": f"llm_http_error:{e.code}"}
-                model_version = self.args.model
-            except Exception:
-                decision = {"action_type": "HOLD", "size": 0.0, "confidence": None, "reason": "llm_error"}
-                model_version = self.args.model
+            if not api_key:
+                decision = {
+                    "action_type": "HOLD",
+                    "size": 0.0,
+                    "confidence": None,
+                    "reason": "missing_api_key",
+                }
+                model_version = model
+            else:
+                obs = request.get("observation", [])
+                if not isinstance(obs, list):
+                    obs = []
+                named = _name_observation(obs, self.args)
+                prompt = _build_prompt(request, named, self.args)
+                try:
+                    client = self._make_provider(provider, model, api_key)
+                    text, llm_latency_ms = client.generate_json(prompt)
+                    obj = _extract_json_object(text) or {}
+                    decision = obj
+                    model_version = model
+                except urllib.error.HTTPError as e:
+                    decision = {"action_type": "HOLD", "size": 0.0, "confidence": None, "reason": f"llm_http_error:{e.code}"}
+                    model_version = model
+                except Exception:
+                    decision = {"action_type": "HOLD", "size": 0.0, "confidence": None, "reason": "llm_error"}
+                    model_version = model
 
         action_type, size, confidence, reason = _normalize_llm_decision(decision, self.args)
         payload = {
