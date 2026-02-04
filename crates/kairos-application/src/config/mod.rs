@@ -10,7 +10,7 @@ pub enum AgentMode {
     Hold,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub run: RunConfig,
@@ -29,7 +29,7 @@ pub struct Config {
     pub report: Option<ReportConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct RunConfig {
     pub run_id: String,
@@ -38,7 +38,7 @@ pub struct RunConfig {
     pub initial_capital: f64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct DbConfig {
     pub url: Option<String>,
@@ -49,21 +49,21 @@ pub struct DbConfig {
     pub pool_max_size: Option<u32>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct PathsConfig {
     pub sentiment_path: Option<String>,
     pub out_dir: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct CostsConfig {
     pub fee_bps: f64,
     pub slippage_bps: f64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct RiskConfig {
     pub max_position_qty: f64,
@@ -71,13 +71,13 @@ pub struct RiskConfig {
     pub max_exposure_pct: f64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct OrdersConfig {
     pub size_mode: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ExecutionConfig {
     pub model: Option<String>,
@@ -93,7 +93,7 @@ pub struct ExecutionConfig {
     pub expire_after_bars: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct FeaturesConfig {
     pub return_mode: kairos_domain::services::features::ReturnMode,
@@ -104,7 +104,7 @@ pub struct FeaturesConfig {
     pub sentiment_missing: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct AgentConfig {
     pub mode: AgentMode,
@@ -116,7 +116,7 @@ pub struct AgentConfig {
     pub feature_version: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct StrategyConfig {
     pub baseline: String,
@@ -124,14 +124,14 @@ pub struct StrategyConfig {
     pub sma_long: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct MetricsConfig {
     pub risk_free_rate: Option<f64>,
     pub annualization_factor: Option<f64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct DataQualityConfig {
     pub max_gaps: Option<usize>,
@@ -144,13 +144,13 @@ pub struct DataQualityConfig {
     pub max_sentiment_dropped: Option<usize>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct PaperConfig {
     pub replay_scale: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ReportConfig {
     pub html: Option<bool>,
@@ -167,6 +167,11 @@ pub fn load_config_with_source(path: &Path) -> Result<(Config, String), String> 
     let config = toml::from_str(&contents)
         .map_err(|err| format!("failed to parse TOML {}: {}", path.display(), err))?;
     Ok((config, contents))
+}
+
+pub fn to_toml_pretty(config: &Config) -> Result<String, String> {
+    toml::to_string_pretty(config)
+        .map_err(|err| format!("failed to serialize config as TOML: {err}"))
 }
 
 #[cfg(test)]

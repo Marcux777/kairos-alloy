@@ -105,7 +105,8 @@ pub fn resolve_execution_config(config: &Config) -> Result<core_exec::ExecutionC
         cfg.tif = match value.trim().to_lowercase().as_str() {
             "ioc" => core_exec::TimeInForce::Ioc,
             "gtc" => core_exec::TimeInForce::Gtc,
-            _ => return Err("execution.tif must be: ioc | gtc".to_string()),
+            "fok" => core_exec::TimeInForce::Fok,
+            _ => return Err("execution.tif must be: ioc | gtc | fok".to_string()),
         };
     }
 
@@ -248,4 +249,82 @@ pub fn config_snapshot_json(
             "max_sentiment_dropped": dq.max_sentiment_dropped,
         })),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_execution_config;
+    use crate::config::{AgentMode, Config};
+
+    fn minimal_config_with_tif(tif: &str) -> Config {
+        let toml_str = format!(
+            r#"
+[run]
+run_id = "test_run"
+symbol = "BTC-USDT"
+timeframe = "1min"
+initial_capital = 1000.0
+
+[db]
+ohlcv_table = "ohlcv_candles"
+exchange = "kucoin"
+market = "spot"
+
+[paths]
+out_dir = "runs/"
+
+[costs]
+fee_bps = 0.0
+slippage_bps = 0.0
+
+[risk]
+max_position_qty = 1.0
+max_drawdown_pct = 1.0
+max_exposure_pct = 1.0
+
+[orders]
+size_mode = "qty"
+
+[execution]
+model = "complete"
+latency_bars = 1
+buy_kind = "market"
+sell_kind = "market"
+price_reference = "close"
+limit_offset_bps = 0.0
+stop_offset_bps = 0.0
+spread_bps = 0.0
+max_fill_pct_of_volume = 1.0
+tif = "{tif}"
+
+[features]
+return_mode = "pct"
+sma_windows = [2]
+rsi_enabled = false
+sentiment_lag = "0s"
+
+[agent]
+mode = "baseline"
+url = "http://127.0.0.1:8000"
+timeout_ms = 200
+retries = 0
+fallback_action = "HOLD"
+api_version = "v1"
+feature_version = "v1"
+"#
+        );
+        let mut cfg: Config = toml::from_str(&toml_str).expect("config should parse");
+        cfg.agent.mode = AgentMode::Baseline;
+        cfg
+    }
+
+    #[test]
+    fn resolve_execution_config_accepts_fok() {
+        let cfg = minimal_config_with_tif("fok");
+        let exec = resolve_execution_config(&cfg).expect("resolve should succeed");
+        assert!(matches!(
+            exec.tif,
+            kairos_domain::services::engine::execution::TimeInForce::Fok
+        ));
+    }
 }

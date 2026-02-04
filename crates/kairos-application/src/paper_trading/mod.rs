@@ -12,6 +12,7 @@ use kairos_domain::repositories::market_stream::MarketStream;
 use kairos_domain::repositories::sentiment::{
     SentimentFormat, SentimentQuery, SentimentRepository,
 };
+use kairos_domain::services::analyzers::{built_in_analyzers, AnalyzerInput};
 use kairos_domain::services::audit::AuditEvent;
 use kairos_domain::services::engine::backtest::{
     BacktestResults, BacktestRunError, BacktestRunner, BarProgress, NoopControl, RunControl,
@@ -645,6 +646,50 @@ fn write_outputs(
         meta.as_ref(),
         Some(&config_snapshot),
     )?;
+
+    let analyzers_dir = run_dir.join("analyzers");
+    artifacts.ensure_dir(&analyzers_dir)?;
+    for analyzer in built_in_analyzers() {
+        let start = Instant::now();
+        let result = analyzer.analyze(&AnalyzerInput {
+            trades: &results.trades,
+            equity: &results.equity,
+            summary: &results.summary,
+            config_snapshot: Some(&config_snapshot),
+        });
+        match result {
+            Ok(value) => {
+                let path = analyzers_dir.join(format!("{}.json", analyzer.name()));
+                artifacts.write_analyzer_json(&path, &value)?;
+                audit_extras.push(timing_event(
+                    &config.run.run_id,
+                    results.equity.last().map(|p| p.timestamp).unwrap_or(0),
+                    "analyzer",
+                    Some(&config.run.symbol),
+                    analyzer.name(),
+                    start.elapsed().as_millis() as u64,
+                    serde_json::json!({
+                        "path": path.display().to_string(),
+                        "status": "ok",
+                    }),
+                ));
+            }
+            Err(err) => {
+                audit_extras.push(AuditEvent {
+                    run_id: config.run.run_id.clone(),
+                    timestamp: results.equity.last().map(|p| p.timestamp).unwrap_or(0),
+                    stage: "analyzer".to_string(),
+                    symbol: Some(config.run.symbol.clone()),
+                    action: analyzer.name().to_string(),
+                    error: Some(err),
+                    details: serde_json::json!({
+                        "duration_ms": start.elapsed().as_millis() as u64,
+                        "status": "err",
+                    }),
+                });
+            }
+        }
+    }
 
     let mut audit_events = results.audit_events;
     audit_events.append(&mut audit_extras);

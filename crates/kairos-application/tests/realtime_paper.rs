@@ -66,6 +66,10 @@ impl ArtifactWriter for NoopArtifacts {
         self.calls.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
+    fn write_analyzer_json(&self, _path: &Path, _value: &serde_json::Value) -> Result<(), String> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
     fn write_summary_html(
         &self,
         _path: &Path,

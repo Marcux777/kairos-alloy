@@ -1,9 +1,51 @@
+use clap::{Parser, ValueEnum};
+use kairos_tui::headless::{HeadlessArgs, HeadlessMode};
 use kairos_tui::{logging, TuiOpts};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+#[derive(Parser, Debug)]
+#[command(name = "kairos-alloy")]
+#[command(about = "Kairos Alloy TUI + optional headless runner.", version)]
+struct Cli {
+    /// Run without TUI and exit after the selected mode completes.
+    #[arg(long)]
+    headless: bool,
+
+    /// Headless mode: validate | backtest | paper | report | sweep
+    #[arg(long)]
+    mode: Option<Mode>,
+
+    /// Config file path (TOML). If omitted, uses env KAIROS_CONFIG.
+    #[arg(long)]
+    config: Option<PathBuf>,
+
+    /// Enable strict validation limits (validate mode only).
+    #[arg(long)]
+    strict: bool,
+
+    /// Input run directory for report regeneration (report mode only).
+    #[arg(long)]
+    run_dir: Option<PathBuf>,
+
+    /// Sweep config file (sweep mode only).
+    #[arg(long)]
+    sweep_config: Option<PathBuf>,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy)]
+enum Mode {
+    Validate,
+    Backtest,
+    Paper,
+    Report,
+    Sweep,
+}
+
 fn main() {
+    let cli = Cli::parse();
+
     let log_store = Arc::new(parking_lot::Mutex::new(logging::LogStore::new(5000)));
     if let Err(err) = init_tracing(log_store.clone()) {
         eprintln!("error: {err}");
@@ -14,10 +56,81 @@ fn main() {
         std::process::exit(1);
     }
 
-    let initial_config_path = std::env::var("KAIROS_CONFIG")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .map(PathBuf::from);
+    if cli.headless {
+        let mode = match cli.mode {
+            Some(m) => m,
+            None => {
+                eprintln!("error: --mode is required with --headless");
+                std::process::exit(1);
+            }
+        };
+
+        let mode = match mode {
+            Mode::Validate => HeadlessMode::Validate,
+            Mode::Backtest => HeadlessMode::Backtest,
+            Mode::Paper => HeadlessMode::Paper,
+            Mode::Report => HeadlessMode::Report,
+            Mode::Sweep => HeadlessMode::Sweep,
+        };
+
+        let config_path = match mode {
+            HeadlessMode::Sweep => cli.config.or_else(|| {
+                std::env::var("KAIROS_CONFIG")
+                    .ok()
+                    .filter(|v| !v.trim().is_empty())
+                    .map(PathBuf::from)
+            }),
+            _ => Some(
+                cli.config
+                    .or_else(|| {
+                        std::env::var("KAIROS_CONFIG")
+                            .ok()
+                            .filter(|v| !v.trim().is_empty())
+                            .map(PathBuf::from)
+                    })
+                    .unwrap_or_else(|| {
+                        eprintln!("error: missing --config and env KAIROS_CONFIG is not set");
+                        std::process::exit(1);
+                    }),
+            ),
+        };
+
+        let result = kairos_tui::headless::run_headless(HeadlessArgs {
+            mode,
+            config_path,
+            strict: cli.strict,
+            run_dir: cli.run_dir,
+            sweep_config: cli.sweep_config,
+        });
+
+        match result {
+            Ok(json) => {
+                println!(
+                    "{}",
+                    serde_json::to_string(&json)
+                        .unwrap_or_else(|_| "{\"status\":\"error\",\"error\":\"json\"}".to_string())
+                );
+                std::process::exit(0);
+            }
+            Err(err) => {
+                let lower = err.to_lowercase();
+                let code = if lower.contains("strict validation failed") {
+                    2
+                } else {
+                    1
+                };
+                eprintln!("error: {err}");
+                std::process::exit(code);
+            }
+        }
+    }
+
+    let initial_config_path = cli.config.or_else(|| {
+        std::env::var("KAIROS_CONFIG")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .map(PathBuf::from)
+    });
 
     let opts = TuiOpts {
         initial_config_path,

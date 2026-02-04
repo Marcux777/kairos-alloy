@@ -1,4 +1,5 @@
 mod app;
+pub mod headless;
 pub mod logging;
 mod tasks;
 mod ui;

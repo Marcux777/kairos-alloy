@@ -87,6 +87,10 @@ impl ArtifactWriter for RecordingWriter {
         Ok(())
     }
 
+    fn write_analyzer_json(&self, _path: &Path, _value: &serde_json::Value) -> Result<(), String> {
+        Ok(())
+    }
+
     fn write_summary_html(
         &self,
         _path: &Path,

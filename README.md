@@ -79,6 +79,18 @@ O que esperar:
 - Gate opcional: `v` alterna "require validate" (quando on, Backtest/Paper só rodam após um Validate bem-sucedido).
 - Artefatos: Backtest/Paper criam `runs/<run_id>/` e escrevem os arquivos listados acima; Reports lista os runs em `runs/`.
 
+## Headless (MVP+): validate/backtest/paper/report/sweep
+
+Rodar sem abrir TUI (stdout = 1 linha JSON; exit code != 0 em falhas):
+
+```bash
+cargo run -p kairos-tui -- --headless --mode validate --config configs/sample.toml --strict
+cargo run -p kairos-tui -- --headless --mode backtest --config configs/sample.toml
+cargo run -p kairos-tui -- --headless --mode paper --config configs/sample.toml
+cargo run -p kairos-tui -- --headless --mode report --config configs/sample.toml --run-dir runs/<run_id>
+cargo run -p kairos-tui -- --headless --mode sweep --sweep-config configs/sweeps/sma_grid.toml
+```
+
 ## Experimentos (determinismo)
 
 Workflow recomendado:

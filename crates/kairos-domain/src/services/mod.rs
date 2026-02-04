@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod analyzers;
 pub mod audit;
 pub mod engine;
 pub mod features;

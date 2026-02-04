@@ -1,0 +1,23 @@
+[base]
+config = "../sample.toml"
+
+[sweep]
+id = "sma_grid_demo"
+mode = "backtest" # backtest | paper
+parallelism = 1
+resume = true
+
+[[params]]
+path = "strategy.sma_short"
+values = [5, 10]
+
+[[params]]
+path = "strategy.sma_long"
+values = [20, 50]
+
+[leaderboard]
+sort_by = "sharpe"
+descending = true
+
+[[splits]]
+id = "full"

@@ -1,4 +1,4 @@
-use crate::app::{App, BacktestTab, SetupFocus, ViewId};
+use crate::app::{App, BacktestTab, QuickEditField, ReportsMode, SetupFocus, ViewId};
 use kairos_domain::value_objects::side::Side;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -110,7 +110,8 @@ fn draw_setup(frame: &mut Frame, area: Rect, app: &mut App) {
         .direction(Direction::Vertical)
         .constraints(
             [
-                Constraint::Length(12),
+                Constraint::Length(10),
+                Constraint::Length(9),
                 Constraint::Min(6),
                 Constraint::Length(6),
             ]
@@ -153,12 +154,75 @@ fn draw_setup(frame: &mut Frame, area: Rect, app: &mut App) {
                 Block::default()
                     .title(match app.setup_focus {
                         SetupFocus::Input => "Setup (input)",
+                        SetupFocus::QuickEdit => "Setup (edit)",
                         SetupFocus::List => "Setup",
                     })
                     .borders(Borders::ALL),
             )
             .wrap(Wrap { trim: false }),
         chunks[0],
+    );
+
+    let quick_edit_lines = if app.config.is_none() {
+        vec![
+            Line::from("Quick Edit"),
+            Line::from(""),
+            Line::from("Load a config first to enable quick edit."),
+        ]
+    } else {
+        let mut lines: Vec<Line> = Vec::new();
+        lines.push(Line::from("Fields (Enter applies selected):"));
+        lines.push(Line::from(""));
+
+        let items: Vec<(QuickEditField, &str, &str)> = vec![
+            (
+                QuickEditField::RunId,
+                "run_id",
+                &app.quick_edit.run_id.value,
+            ),
+            (
+                QuickEditField::Symbol,
+                "symbol",
+                &app.quick_edit.symbol.value,
+            ),
+            (
+                QuickEditField::Timeframe,
+                "timeframe",
+                &app.quick_edit.timeframe.value,
+            ),
+            (
+                QuickEditField::InitialCapital,
+                "initial_capital",
+                &app.quick_edit.initial_capital.value,
+            ),
+        ];
+
+        for (field, label, value) in items {
+            let marker = if field == app.quick_edit.selected {
+                ">"
+            } else {
+                " "
+            };
+            let mut style = Style::default();
+            if field == app.quick_edit.selected {
+                style = style.fg(Color::Yellow).add_modifier(Modifier::BOLD);
+                if app.setup_focus != SetupFocus::QuickEdit {
+                    style = style.fg(Color::DarkGray).add_modifier(Modifier::BOLD);
+                }
+            }
+            lines.push(Line::from(Span::styled(
+                format!("{marker} {label}: {value}"),
+                style,
+            )));
+        }
+
+        lines
+    };
+    frame.render_widget(
+        Paragraph::new(quick_edit_lines)
+            .block(Block::default().title("Quick Edit").borders(Borders::ALL))
+            .wrap(Wrap { trim: false }),
+        chunks[1],
     );
 
     let mut items: Vec<ListItem> = Vec::new();
@@ -190,25 +254,25 @@ fn draw_setup(frame: &mut Frame, area: Rect, app: &mut App) {
     }
     let list_title = match app.setup_focus {
         SetupFocus::List => "Configs (focused)",
-        SetupFocus::Input => "Configs",
+        SetupFocus::Input | SetupFocus::QuickEdit => "Configs",
     };
     frame.render_widget(
         List::new(items).block(Block::default().title(list_title).borders(Borders::ALL)),
-        chunks[1],
+        chunks[2],
     );
 
     let help = vec![
         Line::from("Keys:"),
-        Line::from("  Tab: switch input/list"),
-        Line::from("  Enter: load (focused)"),
-        Line::from("  ↑/↓: select (list)"),
-        Line::from("  i/l: focus input/list"),
+        Line::from("  Tab: switch input/list/edit"),
+        Line::from("  Enter: load/apply (focused)"),
+        Line::from("  ↑/↓: select (list/edit)"),
+        Line::from("  i/l/e: focus input/list/edit"),
         Line::from("  g/F5: refresh list"),
         Line::from("  Esc: back to menu"),
     ];
     frame.render_widget(
         Paragraph::new(help).block(Block::default().title("Help").borders(Borders::ALL)),
-        chunks[2],
+        chunks[3],
     );
 }
 
@@ -302,7 +366,7 @@ fn draw_backtest(frame: &mut Frame, area: Rect, app: &mut App) {
 
     lines.push(Line::from(""));
     lines.push(Line::from(
-        "keys: r run | p pause/resume | x stop | v gate | t paper mode | Esc menu | ←/→ switch tab",
+        "keys: r run | p pause/resume | n step | x stop | v gate | t paper mode | Esc menu | ←/→ switch tab",
     ));
 
     if let Some(last) = &app.status.last_result {
@@ -340,7 +404,9 @@ fn draw_monitor(frame: &mut Frame, area: Rect, app: &mut App) {
             Line::from(""),
             Line::from("Waiting for progress stream..."),
             Line::from("Run Backtest/Paper to see charts update in real time."),
-            Line::from("Keys: p pause/resume, x stop, ↑/↓ scroll trades, PgUp/PgDn scroll logs."),
+            Line::from(
+                "Keys: p pause/resume, n step (paused, backtest), x stop, ↑/↓ scroll trades, PgUp/PgDn scroll logs.",
+            ),
         ];
         frame.render_widget(
             Paragraph::new(lines)
@@ -503,28 +569,134 @@ fn draw_reports(frame: &mut Frame, area: Rect, app: &mut App) {
         .as_ref()
         .map(|c| PathBuf::from(&c.paths.out_dir))
         .unwrap_or_else(|| app.default_out_dir.clone());
-    let mut lines = vec![Line::from(format!("Runs directory: {}", out_dir.display()))];
-    lines.push(Line::from(""));
 
-    match list_runs(&out_dir) {
-        Ok(run_lines) if run_lines.is_empty() => {
-            lines.push(Line::from("no runs found"));
+    match app.reports_mode {
+        ReportsMode::AnalyzerDetail => {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(5), Constraint::Min(3)].as_ref())
+                .split(area);
+
+            let run_id = app
+                .reports_runs
+                .get(app.reports_selected_run)
+                .map(|r| r.run_id.as_str())
+                .unwrap_or("unknown");
+            let analyzer = app
+                .reports_analyzers
+                .get(app.reports_selected_analyzer)
+                .map(|s| s.as_str())
+                .unwrap_or("unknown");
+
+            let mut header = vec![Line::from(format!("Runs directory: {}", out_dir.display()))];
+            header.push(Line::from(format!("run: {run_id} | analyzer: {analyzer}")));
+            header.push(Line::from(
+                "keys: ↑/↓ scroll | PgUp/PgDn scroll | g refresh | Esc back",
+            ));
+            if let Some(err) = &app.last_error {
+                header.push(Line::from(Span::styled(
+                    format!("error: {err}"),
+                    Style::default().fg(Color::Red),
+                )));
+            }
+            if let Some(info) = &app.info_message {
+                header.push(Line::from(Span::styled(
+                    format!("info: {info}"),
+                    Style::default().fg(Color::Green),
+                )));
+            }
+
+            frame.render_widget(
+                Paragraph::new(header)
+                    .block(Block::default().title("Analyzer").borders(Borders::ALL))
+                    .wrap(Wrap { trim: false }),
+                chunks[0],
+            );
+
+            let text = app
+                .reports_analyzer_text
+                .as_deref()
+                .unwrap_or("(no analyzer loaded)");
+            let scroll = (app.reports_scroll.min(u16::MAX as usize) as u16, 0);
+            frame.render_widget(
+                Paragraph::new(text.to_string())
+                    .block(Block::default().title("JSON").borders(Borders::ALL))
+                    .wrap(Wrap { trim: false })
+                    .scroll(scroll),
+                chunks[1],
+            );
         }
-        Ok(run_lines) => {
-            lines.extend(run_lines.into_iter().map(Line::from));
+        ReportsMode::Runs | ReportsMode::AnalyzerList => {
+            let mut lines = vec![Line::from(format!("Runs directory: {}", out_dir.display()))];
+            if let Some(err) = &app.last_error {
+                lines.push(Line::from(Span::styled(
+                    format!("error: {err}"),
+                    Style::default().fg(Color::Red),
+                )));
+            }
+            if let Some(info) = &app.info_message {
+                lines.push(Line::from(Span::styled(
+                    format!("info: {info}"),
+                    Style::default().fg(Color::Green),
+                )));
+            }
+            lines.push(Line::from(""));
+
+            let title = match app.reports_mode {
+                ReportsMode::Runs => {
+                    lines.push(Line::from(
+                        "keys: ↑/↓ select | Enter analyzers | g refresh | Esc menu",
+                    ));
+                    lines.push(Line::from(""));
+                    if app.reports_runs.is_empty() {
+                        lines.push(Line::from("no runs found (press g to refresh)"));
+                    } else {
+                        for (idx, run) in app.reports_runs.iter().enumerate() {
+                            let prefix = if idx == app.reports_selected_run {
+                                "> "
+                            } else {
+                                "  "
+                            };
+                            lines.push(Line::from(format!("{prefix}{}", run.line)));
+                        }
+                    }
+                    "Reports (runs)"
+                }
+                ReportsMode::AnalyzerList => {
+                    let run_id = app
+                        .reports_runs
+                        .get(app.reports_selected_run)
+                        .map(|r| r.run_id.as_str())
+                        .unwrap_or("unknown");
+                    lines.push(Line::from(format!(
+                        "run: {run_id} | keys: ↑/↓ select | Enter open | Esc back"
+                    )));
+                    lines.push(Line::from(""));
+                    if app.reports_analyzers.is_empty() {
+                        lines.push(Line::from("no analyzers found"));
+                    } else {
+                        for (idx, name) in app.reports_analyzers.iter().enumerate() {
+                            let prefix = if idx == app.reports_selected_analyzer {
+                                "> "
+                            } else {
+                                "  "
+                            };
+                            lines.push(Line::from(format!("{prefix}{name}")));
+                        }
+                    }
+                    "Reports (analyzers)"
+                }
+                ReportsMode::AnalyzerDetail => "Reports",
+            };
+
+            frame.render_widget(
+                Paragraph::new(lines)
+                    .block(Block::default().title(title).borders(Borders::ALL))
+                    .wrap(Wrap { trim: false }),
+                area,
+            );
         }
-        Err(err) => lines.push(Line::from(Span::styled(
-            format!("error: {err}"),
-            Style::default().fg(Color::Red),
-        ))),
     }
-
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(Block::default().title("Reports").borders(Borders::ALL))
-            .wrap(Wrap { trim: false }),
-        area,
-    );
 }
 
 fn draw_bottom(frame: &mut Frame, area: Rect, app: &App) {
@@ -558,36 +730,4 @@ fn task_kind_label(kind: crate::tasks::TaskKind) -> &'static str {
     }
 }
 
-fn list_runs(out_dir: &PathBuf) -> Result<Vec<String>, String> {
-    let mut entries: Vec<_> = std::fs::read_dir(out_dir)
-        .map_err(|err| format!("failed to read runs dir: {err}"))?
-        .filter_map(|e| e.ok())
-        .collect();
-    entries.sort_by_key(|e| e.file_name());
-
-    let mut out = Vec::new();
-    for e in entries {
-        if !e.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-            continue;
-        }
-        let run_id = e.file_name().to_string_lossy().to_string();
-        let summary_path = e.path().join("summary.json");
-        if !summary_path.exists() {
-            out.push(format!("{run_id} (no summary.json)"));
-            continue;
-        }
-        let contents = std::fs::read_to_string(&summary_path)
-            .map_err(|err| format!("failed to read {}: {err}", summary_path.display()))?;
-        let value: serde_json::Value = serde_json::from_str(&contents)
-            .map_err(|err| format!("failed to parse {}: {err}", summary_path.display()))?;
-        let summary = value.get("summary").unwrap_or(&value);
-        let net_profit = summary.get("net_profit").and_then(|v| v.as_f64());
-        let sharpe = summary.get("sharpe").and_then(|v| v.as_f64());
-        let max_drawdown = summary.get("max_drawdown").and_then(|v| v.as_f64());
-        out.push(format!(
-            "{run_id}: net_profit={:?} sharpe={:?} max_dd={:?}",
-            net_profit, sharpe, max_drawdown
-        ));
-    }
-    Ok(out)
-}
+// Runs are refreshed in `App` when entering the Reports view (or via `g`/F5).

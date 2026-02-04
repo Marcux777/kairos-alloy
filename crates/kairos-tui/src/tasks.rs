@@ -67,31 +67,60 @@ struct TaskRunnerInner {
 #[derive(Clone)]
 struct TaskControl {
     cancel: Arc<AtomicBool>,
-    paused: Arc<(Mutex<bool>, Condvar)>,
+    pause: Arc<(Mutex<PauseState>, Condvar)>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PauseState {
+    paused: bool,
+    step_credits: u64,
 }
 
 impl TaskControl {
     fn new() -> Self {
         Self {
             cancel: Arc::new(AtomicBool::new(false)),
-            paused: Arc::new((Mutex::new(false), Condvar::new())),
+            pause: Arc::new((
+                Mutex::new(PauseState {
+                    paused: false,
+                    step_credits: 0,
+                }),
+                Condvar::new(),
+            )),
         }
     }
 
     fn cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
-        let (_, cvar) = &*self.paused;
+        let (_, cvar) = &*self.pause;
         cvar.notify_all();
     }
 
     fn toggle_pause(&self) -> bool {
-        let (lock, cvar) = &*self.paused;
-        let mut paused = lock.lock();
-        *paused = !*paused;
-        if !*paused {
+        let (lock, cvar) = &*self.pause;
+        let mut state = lock.lock();
+        state.paused = !state.paused;
+        if !state.paused {
+            state.step_credits = 0;
             cvar.notify_all();
         }
-        *paused
+        state.paused
+    }
+
+    fn step_once(&self) -> bool {
+        let (lock, cvar) = &*self.pause;
+        let mut state = lock.lock();
+        if !state.paused {
+            return false;
+        }
+        state.step_credits = state.step_credits.saturating_add(1);
+        cvar.notify_all();
+        true
+    }
+
+    fn is_paused(&self) -> bool {
+        let (lock, _) = &*self.pause;
+        lock.lock().paused
     }
 }
 
@@ -101,13 +130,16 @@ impl kairos_domain::services::engine::backtest::RunControl for TaskControl {
     }
 
     fn wait_if_paused(&self) -> bool {
-        let (lock, cvar) = &*self.paused;
-        let mut paused = lock.lock();
-        while *paused {
+        let (lock, cvar) = &*self.pause;
+        let mut state = lock.lock();
+        while state.paused && state.step_credits == 0 {
             if self.should_cancel() {
                 return false;
             }
-            cvar.wait(&mut paused);
+            cvar.wait(&mut state);
+        }
+        if state.paused && state.step_credits > 0 {
+            state.step_credits -= 1;
         }
         !self.should_cancel()
     }
@@ -143,15 +175,7 @@ impl TaskRunner {
                 *slot = control.clone();
             }
 
-            let result = run_task(
-                kind,
-                config.as_ref(),
-                &config_toml,
-                &tx,
-                control
-                    .as_ref()
-                    .map(|c| c as &dyn kairos_domain::services::engine::backtest::RunControl),
-            );
+            let result = run_task(kind, config.as_ref(), &config_toml, &tx, control.as_ref());
             {
                 let mut slot = inner.control.lock();
                 *slot = None;
@@ -171,6 +195,11 @@ impl TaskRunner {
         let control = { self.inner.control.lock().clone() };
         control.map(|c| c.toggle_pause()).unwrap_or(false)
     }
+
+    pub fn step_once(&self) -> bool {
+        let control = { self.inner.control.lock().clone() };
+        control.map(|c| c.step_once()).unwrap_or(false)
+    }
 }
 
 fn run_task(
@@ -178,7 +207,7 @@ fn run_task(
     config: &kairos_application::config::Config,
     config_toml: &str,
     tx: &tokio::sync::mpsc::UnboundedSender<TaskEvent>,
-    control: Option<&dyn kairos_domain::services::engine::backtest::RunControl>,
+    control: Option<&TaskControl>,
 ) -> Result<String, String> {
     match kind {
         TaskKind::Validate { strict } => run_validate(config, strict),
@@ -258,7 +287,7 @@ fn run_backtest(
     config: &kairos_application::config::Config,
     config_toml: &str,
     tx: &tokio::sync::mpsc::UnboundedSender<TaskEvent>,
-    control: Option<&dyn kairos_domain::services::engine::backtest::RunControl>,
+    control: Option<&TaskControl>,
 ) -> Result<String, String> {
     use kairos_domain::services::engine::backtest::BarProgress;
 
@@ -275,7 +304,12 @@ fn run_backtest(
         last = Some((x, p.close, p.equity));
 
         let has_trades = !p.trades_in_bar.is_empty();
-        if bar_index.is_multiple_of(STREAM_EVERY_N_BARS) || has_trades {
+        let stream_every = if control.map(|c| c.is_paused()).unwrap_or(false) {
+            1
+        } else {
+            STREAM_EVERY_N_BARS
+        };
+        if bar_index.is_multiple_of(stream_every) || has_trades {
             let trades_in_bar = if has_trades {
                 p.trades_in_bar
                     .into_iter()
@@ -310,7 +344,7 @@ fn run_backtest(
             sentiment_repo.as_ref(),
             &artifacts,
             remote_agent,
-            control,
+            control as &dyn kairos_domain::services::engine::backtest::RunControl,
             &mut progress,
         )?
     } else {
@@ -342,7 +376,7 @@ fn run_paper(
     config: &kairos_application::config::Config,
     config_toml: &str,
     tx: &tokio::sync::mpsc::UnboundedSender<TaskEvent>,
-    control: Option<&dyn kairos_domain::services::engine::backtest::RunControl>,
+    control: Option<&TaskControl>,
 ) -> Result<String, String> {
     use kairos_domain::services::engine::backtest::BarProgress;
 
@@ -394,7 +428,7 @@ fn run_paper(
             sentiment_repo.as_ref(),
             &artifacts,
             remote_agent,
-            control,
+            control as &dyn kairos_domain::services::engine::backtest::RunControl,
             &mut progress,
         )?
     } else {
@@ -426,7 +460,7 @@ fn run_paper_realtime(
     config: &kairos_application::config::Config,
     config_toml: &str,
     tx: &tokio::sync::mpsc::UnboundedSender<TaskEvent>,
-    control: Option<&dyn kairos_domain::services::engine::backtest::RunControl>,
+    control: Option<&TaskControl>,
 ) -> Result<String, String> {
     use kairos_domain::repositories::market_stream::MarketStream;
 
@@ -505,7 +539,7 @@ fn run_paper_realtime(
             sentiment_repo.as_ref(),
             &artifacts,
             remote_agent,
-            control,
+            control as &dyn kairos_domain::services::engine::backtest::RunControl,
             &mut progress,
             &mut on_status,
         )?
@@ -514,4 +548,57 @@ fn run_paper_realtime(
     };
 
     Ok(run_dir.display().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TaskControl;
+    use kairos_domain::services::engine::backtest::RunControl;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn step_once_requires_pause() {
+        let control = TaskControl::new();
+        assert!(!control.step_once());
+        assert!(control.toggle_pause());
+        assert!(control.step_once());
+    }
+
+    #[test]
+    fn wait_if_paused_consumes_one_step_credit() {
+        let control = TaskControl::new();
+        assert!(control.toggle_pause());
+
+        assert!(control.step_once());
+        assert!(control.wait_if_paused());
+
+        let (tx, rx) = mpsc::channel();
+        let control2 = control.clone();
+        std::thread::spawn(move || {
+            let ok = control2.wait_if_paused();
+            let _ = tx.send(ok);
+        });
+
+        assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
+        assert!(control.step_once());
+        assert!(rx.recv_timeout(Duration::from_millis(250)).unwrap());
+    }
+
+    #[test]
+    fn cancel_unblocks_wait_if_paused() {
+        let control = TaskControl::new();
+        assert!(control.toggle_pause());
+
+        let (tx, rx) = mpsc::channel();
+        let control2 = control.clone();
+        std::thread::spawn(move || {
+            let ok = control2.wait_if_paused();
+            let _ = tx.send(ok);
+        });
+
+        assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
+        control.cancel();
+        assert!(!rx.recv_timeout(Duration::from_millis(250)).unwrap());
+    }
 }

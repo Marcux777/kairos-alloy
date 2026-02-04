@@ -13,3 +13,11 @@ Notes:
 - `data_quality.*`: used by `validate --strict`. `max_gaps` limits the number of gap segments; `max_missing_bars` limits the number of missing bars inside gaps; `max_duplicates`/`max_out_of_order`/`max_invalid_close` limit those issues for OHLCV.
 - Default `db.url` in `sample.toml` uses `db:5432` (the `docker compose` service name). If running outside compose, use `localhost:5432`.
 - `db.pool_max_size` (optional, default: 8): max connections for the Postgres OHLCV connection pool.
+
+## Sweeps (MVP+)
+
+Sweep configs live under `configs/sweeps/` and define a grid search over a base `config.toml`.
+
+Example:
+
+- `configs/sweeps/sma_grid.toml`

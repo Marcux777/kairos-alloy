@@ -15,6 +15,7 @@ pub trait ArtifactWriter {
         meta: Option<&serde_json::Value>,
         config_snapshot: Option<&serde_json::Value>,
     ) -> Result<(), String>;
+    fn write_analyzer_json(&self, path: &Path, value: &serde_json::Value) -> Result<(), String>;
     fn write_summary_html(
         &self,
         path: &Path,

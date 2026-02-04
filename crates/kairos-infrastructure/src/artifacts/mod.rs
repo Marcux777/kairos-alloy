@@ -88,6 +88,19 @@ impl ArtifactWriter for FilesystemArtifactWriter {
         result
     }
 
+    fn write_analyzer_json(&self, path: &Path, value: &serde_json::Value) -> Result<(), String> {
+        let start = Instant::now();
+        let result = serde_json::to_string_pretty(value)
+            .map_err(|err| format!("failed to serialize analyzer json: {err}"))
+            .and_then(|json| {
+                fs::write(path, json).map_err(|err| {
+                    format!("failed to write analyzer json {}: {}", path.display(), err)
+                })
+            });
+        record_write_metrics("analyzer_json", start, &result);
+        result
+    }
+
     fn write_summary_html(
         &self,
         path: &Path,
