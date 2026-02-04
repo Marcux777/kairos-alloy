@@ -421,10 +421,12 @@ impl AgentClient {
             "BUY" => Action {
                 action_type: ActionType::Buy,
                 size: response.size,
+                reason: response.reason.clone(),
             },
             "SELL" => Action {
                 action_type: ActionType::Sell,
                 size: response.size,
+                reason: response.reason.clone(),
             },
             _ => Action::hold(),
         }
@@ -442,6 +444,7 @@ impl AgentClient {
             confidence: None,
             model_version: None,
             latency_ms: None,
+            reason: None,
         }
     }
 }
@@ -457,6 +460,11 @@ fn validate_action_response(response: &ActionResponse) -> Result<(), String> {
     if let Some(confidence) = response.confidence {
         if !confidence.is_finite() || !(0.0..=1.0).contains(&confidence) {
             return Err(format!("invalid confidence: {}", confidence));
+        }
+    }
+    if let Some(reason) = response.reason.as_deref() {
+        if reason.len() > 2000 {
+            return Err("invalid reason: too long".to_string());
         }
     }
     Ok(())

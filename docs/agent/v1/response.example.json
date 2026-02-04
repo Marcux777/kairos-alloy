@@ -2,6 +2,7 @@
   "action_type": "HOLD",
   "size": 0.0,
   "confidence": 0.73,
+  "reason": "No trade: insufficient signal / uncertain regime.",
   "model_version": "dummy-0.1",
   "latency_ms": 12
 }

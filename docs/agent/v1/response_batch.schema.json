@@ -15,12 +15,12 @@
         "properties": {
           "action_type": { "type": "string", "enum": ["BUY", "SELL", "HOLD"] },
           "size": { "type": "number", "minimum": 0 },
-          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-          "model_version": { "type": "string" },
-          "latency_ms": { "type": "integer", "minimum": 0 }
+          "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+          "reason": { "type": ["string", "null"] },
+          "model_version": { "type": ["string", "null"] },
+          "latency_ms": { "type": ["integer", "null"], "minimum": 0 }
         }
       }
     }
   }
 }
-

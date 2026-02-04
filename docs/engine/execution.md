@@ -17,7 +17,9 @@ Isso preserva causalidade: a estratégia toma decisão **depois** de ver os fill
 
 ## Tipos de ordem (internos)
 
-O contrato do agente **não muda**: ele continua respondendo apenas com `action_type` e `size`.
+O engine usa apenas `action_type` e `size` para decidir ordens. Campos opcionais como
+`confidence`, `model_version`, `latency_ms` e `reason` podem ser retornados pelo agente e
+ficam disponíveis para auditoria/diagnóstico, mas não alteram a execução.
 
 O tipo de ordem é decidido por configuração:
 

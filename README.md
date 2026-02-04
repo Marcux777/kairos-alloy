@@ -53,6 +53,14 @@ python3 tools/agent-dummy/agent_dummy.py --host 127.0.0.1 --port 8000 --mode tin
 cargo run -p kairos-tui --
 ```
 
+Opcional: rodar um agente LLM (Gemini) em modo mock (sem API key):
+
+```bash
+python3 tools/agent_llm.py --llm-mode mock &
+```
+
+Depois, na TUI, selecione `configs/llm_gemini.toml` (ou rode headless com `--config configs/llm_gemini.toml`).
+
 ### 5) Ver os artefatos gerados
 
 O run escreve em `runs/<run_id>/` (ex.: `runs/quickstart_btc_usdt_1min/`):

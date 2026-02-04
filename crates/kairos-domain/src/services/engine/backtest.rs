@@ -54,6 +54,7 @@ struct SimOrder {
     id: u64,
     side: Side,
     remaining_qty: f64,
+    reason: Option<String>,
 
     kind: OrderKind,
     limit_price: Option<f64>,
@@ -549,7 +550,10 @@ where
                 fee,
                 slippage: impact_cost,
                 strategy_id: self.strategy.name().to_string(),
-                reason: "strategy".to_string(),
+                reason: order
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "strategy".to_string()),
             });
 
             if !is_liquidity_infinite {
@@ -571,6 +575,7 @@ where
                     "slippage": impact_cost,
                     "raw_price": raw_price,
                     "price_reason": price_reason,
+                    "reason": order.reason.clone(),
                     "order_id": order.id,
                     "kind": format!("{:?}", order.kind).to_lowercase(),
                     "strategy_id": self.strategy.name(),
@@ -853,6 +858,7 @@ where
                     id: self.next_order_id,
                     side: Side::Buy,
                     remaining_qty: qty,
+                    reason: action.reason.clone(),
                     kind,
                     limit_price,
                     stop_price,
@@ -876,6 +882,7 @@ where
                         "side": "BUY",
                         "requested_size": requested_size,
                         "resolved_qty": qty,
+                        "reason": order.reason.clone(),
                         "size_mode": match self.size_mode {
                             OrderSizeMode::Quantity => "qty",
                             OrderSizeMode::PctEquity => "pct_equity",
@@ -1031,6 +1038,7 @@ where
                     id: self.next_order_id,
                     side: Side::Sell,
                     remaining_qty: qty,
+                    reason: action.reason.clone(),
                     kind,
                     limit_price,
                     stop_price,
@@ -1054,6 +1062,7 @@ where
                         "side": "SELL",
                         "requested_size": requested_size,
                         "resolved_qty": qty,
+                        "reason": order.reason.clone(),
                         "size_mode": match self.size_mode {
                             OrderSizeMode::Quantity => "qty",
                             OrderSizeMode::PctEquity => "pct_equity",
@@ -1328,6 +1337,7 @@ mod tests {
                 Action {
                     action_type: ActionType::Buy,
                     size: 1.0,
+                    reason: None,
                 }
             }
             fn drain_audit_events(&mut self) -> Vec<crate::services::audit::AuditEvent> {
@@ -1475,6 +1485,7 @@ mod tests {
             Action {
                 action_type: ActionType::Buy,
                 size: self.size,
+                reason: None,
             }
         }
     }
@@ -1636,7 +1647,7 @@ mod tests {
         }
 
         fn on_bar(&mut self, _bar: &Bar, _portfolio: &Portfolio) -> Action {
-            let action = self.actions.get(self.i).copied().unwrap_or(Action::hold());
+            let action = self.actions.get(self.i).cloned().unwrap_or(Action::hold());
             self.i = self.i.saturating_add(1);
             action
         }
@@ -1810,10 +1821,12 @@ mod tests {
             Action {
                 action_type: ActionType::Buy,
                 size: 1.0,
+                reason: None,
             },
             Action {
                 action_type: ActionType::Sell,
                 size: 1.0,
+                reason: None,
             },
         ]);
         let mut runner = BacktestRunner::new_with_execution(

@@ -4,6 +4,7 @@
       "action_type": "HOLD",
       "size": 0.0,
       "confidence": 1.0,
+      "reason": "No trade: waiting for evaluation window.",
       "model_version": "dummy-0.1",
       "latency_ms": 2
     },
@@ -11,9 +12,9 @@
       "action_type": "BUY",
       "size": 0.0001,
       "confidence": 1.0,
+      "reason": "BUY: trend up + oversold mean-reversion signal.",
       "model_version": "dummy-0.1",
       "latency_ms": 2
     }
   ]
 }
-

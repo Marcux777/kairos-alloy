@@ -44,6 +44,7 @@ pub struct ActionResponse {
     pub confidence: Option<f64>,
     pub model_version: Option<String>,
     pub latency_ms: Option<u64>,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

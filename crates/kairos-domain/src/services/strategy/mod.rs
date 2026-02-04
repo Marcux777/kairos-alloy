@@ -53,6 +53,7 @@ impl Strategy for BuyAndHold {
         Action {
             action_type: ActionType::Buy,
             size: self.size,
+            reason: None,
         }
     }
 }
@@ -101,6 +102,7 @@ impl Strategy for SimpleSma {
             return Action {
                 action_type: ActionType::Buy,
                 size: 1.0,
+                reason: None,
             };
         }
 
@@ -108,6 +110,7 @@ impl Strategy for SimpleSma {
             return Action {
                 action_type: ActionType::Sell,
                 size: portfolio.position_qty(&bar.symbol),
+                reason: None,
             };
         }
 
@@ -205,10 +208,12 @@ impl AgentStrategy {
             "BUY" => Action {
                 action_type: ActionType::Buy,
                 size: response.size,
+                reason: response.reason.clone(),
             },
             "SELL" => Action {
                 action_type: ActionType::Sell,
                 size: response.size,
+                reason: response.reason.clone(),
             },
             _ => Action::hold(),
         }
@@ -226,6 +231,7 @@ impl AgentStrategy {
             confidence: None,
             model_version: None,
             latency_ms: None,
+            reason: None,
         }
     }
 }
@@ -279,6 +285,7 @@ impl Strategy for AgentStrategy {
                 "used_fallback": used_fallback,
                 "response_action_type": response.action_type,
                 "response_size": response.size,
+                "response_reason": response.reason,
                 "portfolio_state": {
                     "cash": portfolio.cash(),
                     "position_qty": portfolio.position_qty(&bar.symbol),
@@ -424,6 +431,7 @@ mod tests {
                     confidence: None,
                     model_version: None,
                     latency_ms: None,
+                    reason: None,
                 })
             } else {
                 Err("agent_down".to_string())

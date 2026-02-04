@@ -15,11 +15,14 @@
       "minimum": 0
     },
     "confidence": {
-      "type": "number",
+      "type": ["number", "null"],
       "minimum": 0,
       "maximum": 1
     },
-    "model_version": { "type": "string" },
-    "latency_ms": { "type": "integer", "minimum": 0 }
+    "reason": {
+      "type": ["string", "null"]
+    },
+    "model_version": { "type": ["string", "null"] },
+    "latency_ms": { "type": ["integer", "null"], "minimum": 0 }
   }
 }

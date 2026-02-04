@@ -116,6 +116,9 @@ Entregar um aplicativo de Interface de Terminal (TUI) em Rust que centralize a e
 - Suporte completo a múltiplos ativos e rebalanceamento de portfólio multiativo.
 - Derivativos (futuros, margem, alavancagem), ordens limit/stop complexas.
 - Interface gráfica completa (web/desktop).
+- **WFA (Walk-Forward Analysis):** re-otimizar parâmetros periodicamente durante o teste (evitar overfitting).
+- **Multi-exchange (Data Ingest):** abstrair a camada de conexão para plugar outras exchanges (ex.: Binance, Bybit).
+- **Optimize (paralelo em Rust):** rodar backtests em massa (grid/random search) com paralelismo real para achar parâmetros ideais.
 
 ## 6. Requisitos funcionais
 
@@ -168,7 +171,7 @@ O MVP utilizará um serviço Python para inferência. O Rust envia observation e
 
 **Esquema mínimo de mensagens (JSON)**
 
-- POST /v1/act: request contém run_id, timestamp, symbol, timeframe, observation[], portfolio_state{}; response contém action_type, size, confidence, model_version, latency_ms.
+- POST /v1/act: request contém run_id, timestamp, symbol, timeframe, observation[], portfolio_state{}; response contém action_type, size, confidence, model_version, latency_ms, reason.
 - Versionamento por campo api_version e feature_version.
 - Timeout configurável; fallback: HOLD e redução de risco em caso de falha.
 - O cliente HTTP do Rust deve suportar conexão persistente (keep-alive) no MVP. Evoluções pós-MVP podem incluir gRPC ou ZeroMQ para reduzir overhead em backtests de alta velocidade.
@@ -198,8 +201,21 @@ Response:
 - `action_type` (string): `BUY`, `SELL`, `HOLD`.
 - `size` (number): tamanho da ordem (interpretação definida pela estratégia/config: fração do capital ou qty).
 - `confidence` (number, opcional): confiança do modelo (0–1).
+- `reason` (string, opcional): justificativa curta (interpretabilidade/auditoria; não altera a execução).
 - `model_version` (string, opcional): versão do modelo.
 - `latency_ms` (number, opcional): latência observada no lado Python (para diagnóstico).
+
+**Ferramentas oficiais de referência (repo)**
+
+- `tools/agent-dummy`: agente HTTP mínimo para smoke tests / golden path.
+- `tools/agent-llm`: agente LLM (ex.: Gemini) compatível com o contrato, com **cadência** (chamar o LLM a cada N barras) + cache **record/replay** para reduzir custo e tornar backtests determinísticos.
+
+**LLM: desafios e mitigação (quando aplicável)**
+
+- Latência: usar timeframes maiores e/ou cadência (ex.: 1 chamada a cada N barras).
+- Custo: evitar chamada por barra; cache record/replay; amostragem por pontos-chave.
+- Determinismo: temperature=0 e replay de cache por request-hash.
+- Falhas: timeout + retry limitado + fallback HOLD + auditoria do erro.
 
 ### 6.7 Interface TUI (Core Experience)
 
@@ -399,6 +415,12 @@ Restrições e convenções (MVP):
 - Klines (spot/futures) usam peso 3 no pool público; respeitar o rate limit e aplicar backoff em caso de 429.
 - Persistir via upsert na tabela `ohlcv_candles` para garantir idempotência.
 
+**Evolução pós-MVP (multi-exchange / conectores plugáveis)**
+
+- Definir uma porta/interface de “Exchange OHLCV Provider” para isolar: paginação, timeframes suportados, rate limit/backoff e normalização do payload.
+- KuCoin vira uma implementação; futuras: Binance (spot) e Bybit (spot/derivativos quando fizer sentido).
+- Persistência no PostgreSQL permanece a mesma (chave única por exchange/market/symbol/timeframe/timestamp).
+
 ## 17. Critérios de aceitação por módulo
 
 ### 17.1 TUI/UX
@@ -434,6 +456,9 @@ Restrições e convenções (MVP):
 - Baseline interno executa sem dependências externas.
 - Cliente HTTP envia observation e recebe action.
 - Fallback HOLD em timeout.
+- O agente pode retornar `reason` (opcional) para interpretabilidade/auditoria; o engine usa apenas `action_type` e `size`.
+- Existe “golden path” validado com `tools/agent-dummy`.
+- Existe agente LLM de referência (`tools/agent-llm`) com modo mock (sem API key) e modo live.
 
 ### 17.7 Report
 
@@ -510,6 +535,9 @@ Papéis compradores/usuários típicos:
 - Binário Único (`kairos-alloy`) que contém a aplicação TUI.
 - Bibliotecas internas (crates) reutilizáveis (core/data/features/engine/risk/agents/report/cli).
 - Esquema versionado do contrato com o agente (JSON) e exemplos de requests/responses.
+- Agentes de referência (repo): `tools/agent-dummy` e `tools/agent-llm` (para validação e integração).
+- Ferramentas de reprodutibilidade: `scripts/compare_runs.py` (comparação determinística de artefatos entre runs).
+- Experimentos: `--mode sweep` (grid de parâmetros + splits + leaderboard).
 
 ### 23.2 Modos de entrega (B2B)
 
@@ -654,6 +682,34 @@ Critérios de aceite:
 
 - O cliente integra seu agente com base no contrato `v1` e roda um piloto com logs auditáveis.
 
+**Fase E — Experimentação avançada (Optimize + WFA)**
+
+Entregáveis:
+
+- Evoluir `sweep` para honrar `parallelism` com execução concorrente real (rodar backtests em massa com saturação de CPU).
+- Otimização (grid/random search) com leaderboard, export dos melhores parâmetros e artefatos agregados.
+- Implementar `walkforward` (WFA): por janela, rodar otimização in-sample, escolher best params, avaliar out-of-sample e repetir em janelas rolantes.
+- Artefatos do WFA (por run/sweep): `wfa_manifest.json`, `folds.csv`, `leaderboard.csv`, `best_params_by_fold.toml` e `summary.json` agregado.
+
+Critérios de aceite:
+
+- Mesma entrada + mesmo grid + mesma seed ⇒ mesmos resultados (determinismo).
+- Throughput melhora ao aumentar `parallelism` (até saturar CPU).
+- WFA gera métricas por fold e agregado, e permite comparar “WFA vs parâmetros fixos”.
+
+**Fase F — Conectores de dados (multi-exchange)**
+
+Entregáveis:
+
+- Abstrair a camada de conexão do ingestor (porta/interface) para suportar múltiplas exchanges com a mesma semântica (timeframes, paginação, backoff).
+- KuCoin permanece como adapter inicial; adicionar Binance (spot) como segundo adapter; Bybit como terceiro (opcional).
+- Normalização e validação padronizadas (campos, timezone UTC, gaps/duplicatas/out-of-order) antes de persistir.
+
+Critérios de aceite:
+
+- Ingest funciona para o mesmo período/símbolo/timeframe em pelo menos 2 exchanges, gerando OHLCV consistente no DB.
+- Idempotência (upsert) preservada e validada (re-ingest não duplica candles).
+
 #### 25.5.4 Requisitos de engenharia para “self-hosted B2B”
 
 **Compatibilidade e upgrades**
@@ -793,6 +849,7 @@ feature_version = "v1"
   "action_type": "HOLD",
   "size": 0.0,
   "confidence": 0.62,
+  "reason": "No trade: insufficient signal / uncertain regime.",
   "model_version": "drl-2026-01-01",
   "latency_ms": 12
 }

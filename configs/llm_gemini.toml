@@ -1,0 +1,60 @@
+[run]
+run_id = "btc_usdt_1min_llm_mock"
+symbol = "BTC-USDT"
+timeframe = "1min"
+initial_capital = 10000.0
+
+[db]
+# Omit `url` and use `KAIROS_DB_URL`, or set it explicitly.
+# url = "postgres://kairos:CHANGE_ME@db:5432/kairos"
+ohlcv_table = "ohlcv_candles"
+exchange = "kucoin"
+market = "spot"
+
+[paths]
+out_dir = "runs/"
+
+[costs]
+fee_bps = 10.0
+slippage_bps = 5.0
+
+[risk]
+max_position_qty = 1.0
+max_drawdown_pct = 0.30
+max_exposure_pct = 1.00
+
+[orders]
+# "qty" | "pct_equity"
+size_mode = "pct_equity"
+
+[execution]
+model = "complete"
+latency_bars = 1
+buy_kind = "market"
+sell_kind = "market"
+price_reference = "close"
+limit_offset_bps = 10.0
+stop_offset_bps = 10.0
+spread_bps = 0.0
+max_fill_pct_of_volume = 0.25
+tif = "gtc"
+
+[features]
+return_mode = "log"
+sma_windows = [10, 50]
+volatility_windows = [10]
+rsi_enabled = false
+sentiment_lag = "5m"
+sentiment_missing = "error"
+
+[agent]
+mode = "remote"
+url = "http://127.0.0.1:8000"
+timeout_ms = 5000
+retries = 0
+fallback_action = "HOLD"
+api_version = "v1"
+feature_version = "v1"
+
+[report]
+html = false

@@ -67,6 +67,7 @@ fn resp(action_type: &str, size: f64) -> ActionResponse {
         confidence: None,
         model_version: None,
         latency_ms: None,
+        reason: None,
     }
 }
 
