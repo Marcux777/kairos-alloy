@@ -119,7 +119,7 @@ O comparador valida `equity.csv`, `trades.csv` e `summary.json` (com normalizaca
 ## Notebooks (pesquisa)
 
 O repositorio inclui notebooks (um por artigo planejado) em `notebooks/`. Eles consomem artefatos gerados em `runs/<run_id>/`
-e exportam tabelas/figuras de volta para `runs/<run_id>/paper/`.
+e exibem as figuras diretamente no notebook (sem salvar imagens por padrao).
 
 Veja: `notebooks/README.md`.
 

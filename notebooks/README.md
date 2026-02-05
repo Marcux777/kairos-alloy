@@ -34,8 +34,8 @@ python3 -m papermill notebooks/artigo_02_benchmark.ipynb /tmp/out.ipynb -p RUN_I
 
 ## Conventions
 
-- Prefer writing derived tables/figures back into the run folder:
+- Figures should be shown inline in notebooks and are not saved by default.
+- If you decide to export derived tables, prefer writing back into the run folder:
   - `runs/<run_id>/paper/tables/`
-  - `runs/<run_id>/paper/figures/`
 - Never store API keys or secrets in notebooks or artifacts.
 - If you need more metadata, add it to `runs/<run_id>/manifest.json` (future) and keep notebooks backward compatible.

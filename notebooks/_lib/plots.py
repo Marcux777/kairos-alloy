@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -11,7 +10,6 @@ def plot_equity_curve(
     equity: pd.DataFrame,
     *,
     title: str = "Equity",
-    save_path: Optional[Path] = None,
 ):
     if equity.empty:
         raise ValueError("equity dataframe is empty")
@@ -28,9 +26,4 @@ def plot_equity_curve(
     ax.set_ylabel("equity")
     ax.grid(True, alpha=0.25)
     fig.tight_layout()
-
-    if save_path is not None:
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(save_path, dpi=160)
     return fig, ax
-
