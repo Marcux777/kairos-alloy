@@ -1,0 +1,14 @@
+# Minimal notebook stack for Kairos Alloy research notebooks.
+#
+# Keep this small and portable. Prefer stdlib where possible.
+jupyterlab>=4.0
+papermill>=2.5
+
+numpy>=1.24
+pandas>=2.0
+matplotlib>=3.7
+toml>=0.10
+
+# Optional (uncomment as needed):
+# scipy>=1.10
+# statsmodels>=0.14

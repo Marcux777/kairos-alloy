@@ -116,6 +116,13 @@ scripts/compare_runs.py runs/<run_a> runs/<run_b>
 
 O comparador valida `equity.csv`, `trades.csv` e `summary.json` (com normalizacao que ignora `run_id` e `config_snapshot`).
 
+## Notebooks (pesquisa)
+
+O repositorio inclui notebooks (um por artigo planejado) em `notebooks/`. Eles consomem artefatos gerados em `runs/<run_id>/`
+e exportam tabelas/figuras de volta para `runs/<run_id>/paper/`.
+
+Veja: `notebooks/README.md`.
+
 ## Configuracao (`configs/*.toml`)
 
 Arquivos prontos:
