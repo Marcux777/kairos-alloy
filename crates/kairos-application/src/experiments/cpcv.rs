@@ -218,15 +218,21 @@ fn compute_train_segments(
     }
 
     let mut blocked = vec![false; total];
-    let before = cfg
+    // Purging should remove any training sample whose label horizon overlaps the test window.
+    // For a forward-looking label with horizon `h`, the overlap interval is [s-h, e+h].
+    // `purge_bars` and `embargo_bars` are extra safety buffers beyond the mathematical purge.
+    let purge_left = cfg
         .horizon_bars
         .saturating_add(cfg.purge_bars)
         .min(total.saturating_sub(1));
-    let after = cfg.embargo_bars.min(total.saturating_sub(1));
+    let purge_right = cfg
+        .horizon_bars
+        .saturating_add(cfg.embargo_bars)
+        .min(total.saturating_sub(1));
 
     for &(s, e) in test_ranges {
-        let block_start = s.saturating_sub(before);
-        let block_end = (e + after).min(total - 1);
+        let block_start = s.saturating_sub(purge_left);
+        let block_end = (e + purge_right).min(total - 1);
         for idx in block_start..=block_end {
             blocked[idx] = true;
         }
@@ -295,25 +301,30 @@ mod tests {
     }
 
     #[test]
-    fn generate_cpcv_purges_before_test_start() {
+    fn generate_cpcv_applies_horizon_on_both_sides_of_test() {
         let b = bars(12);
         let cfg = CpcvConfig {
             n_groups: 3,
             k_test: 1,
             horizon_bars: 2,
-            purge_bars: 1,
+            purge_bars: 0,
             embargo_bars: 0,
         };
         let result = generate_cpcv(&b, cfg).unwrap();
-        let fold = &result.folds[0]; // test group 0 => idx 0..3
-        assert_eq!(fold.test_segments[0].start_idx, 0);
-        assert_eq!(fold.test_segments[0].end_idx, 3);
-        // purge_before = horizon(2)+purge(1)=3 => train cannot start before idx 7 (since group 1 starts at 4 but blocked 0..3 anyway)
-        // blocked window is [0..3], so training begins at 4 (not blocked), but must respect blocked created for s=0 so no extra.
-        assert!(fold
-            .train_segments
+
+        // For 12 bars split into 3 groups, group 1 is indices 4..7.
+        let fold = result
+            .folds
             .iter()
-            .all(|seg| seg.start_idx > fold.test_segments[0].end_idx));
+            .find(|f| f.test_groups == vec![1])
+            .expect("fold for test group 1");
+        assert_eq!(fold.test_segments[0].start_idx, 4);
+        assert_eq!(fold.test_segments[0].end_idx, 7);
+
+        // With horizon=2, training must exclude [s-2 .. e+2] => [2..9].
+        for seg in &fold.train_segments {
+            assert!(seg.end_idx < 2 || seg.start_idx > 9);
+        }
     }
 
     #[test]
