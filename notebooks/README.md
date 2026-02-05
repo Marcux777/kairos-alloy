@@ -53,7 +53,7 @@ from pathlib import Path
 from _lib import KairosCPCV
 
 cv = KairosCPCV.generate(
-    config=Path("configs/your_config.toml"),
+    config=Path("platform/ops/configs/your_config.toml"),
     n_groups=6,
     k_test=2,
     horizon_bars=1,

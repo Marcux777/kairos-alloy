@@ -44,7 +44,7 @@ def run_cpcv(
         "run",
         "-q",
         "-p",
-        "kairos-tui",
+        "kairos-alloy",
         "--",
         "--headless",
         "--mode",
