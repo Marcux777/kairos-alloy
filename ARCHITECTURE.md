@@ -6,9 +6,13 @@ Kairos Alloy is a Rust-first system organized as a workspace with six crates:
 - `kairos-domain`: domain types + pure engine logic (no IO)
 - `kairos-application`: use cases / orchestration (backtest/paper/validate/report)
 - `kairos-infrastructure`: adapters (Postgres, filesystem, HTTP)
-- `kairos-tui`: terminal UI (user-facing)
+- `kairos-alloy`: terminal UI (user-facing)
 - `kairos-bench`: synthetic benchmarking tool (dev)
 - `kairos-ingest`: data ingestion (KuCoin OHLCV → PostgreSQL) + DB migrations
+
+Workspace layout (canonical):
+- `apps/`: executáveis (`kairos-alloy`, `kairos-ingest`, `kairos-bench`) e agentes Python de referência
+- `platform/`: domínio/aplicação/infraestrutura + assets operacionais em `platform/ops/`
 
 ## Current vs. Target
 
@@ -16,7 +20,7 @@ Kairos Alloy is a Rust-first system organized as a workspace with six crates:
 The workspace is already structured as **Ports & Adapters**:
 - domain logic and the backtest engine live in `kairos-domain`
 - IO adapters live in `kairos-infrastructure`
-- `kairos-tui` is the user-facing interface and calls `kairos-application`
+- `kairos-alloy` is the user-facing interface and calls `kairos-application`
 
 ### Target (recommended): Hexagonal (Ports & Adapters) + DDD-inspired layers
 We will keep evolving the workspace toward a stricter **Ports & Adapters** structure:
@@ -39,7 +43,7 @@ Includes:
 - `services`: feature pipeline, strategy trait + strategies, engine/backtest
 - `repositories`: ports/traits for IO boundaries
 
-### kairos-tui
+### kairos-alloy
 Entry point for users (terminal UI). Handles navigation, logging panels, and running use cases.
 
 ### kairos-bench
@@ -48,7 +52,7 @@ Synthetic benchmark tool for development and CI (Perf Bench).
 ### kairos-ingest
 Ingests OHLCV from KuCoin and persists it in PostgreSQL.
 
-It also applies SQL migrations from `migrations/`.
+It also applies SQL migrations from `platform/ops/migrations/`.
 
 ### kairos-application
 Use cases / orchestration:
@@ -76,5 +80,5 @@ When the migration is complete:
 - `kairos-domain` must not depend on any IO crates (reqwest/postgres/tokio-postgres/fs, etc.).
 - `kairos-application` depends only on `kairos-domain`.
 - `kairos-infrastructure` depends on `kairos-domain` (implements ports).
-- `kairos-tui` depends on `kairos-application` (+ UI-only concerns).
+- `kairos-alloy` depends on `kairos-application` (+ UI-only concerns).
 - `kairos-ingest` may depend on `kairos-infrastructure` for Postgres adapters (or remain a separate tool crate).

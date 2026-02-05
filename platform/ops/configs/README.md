@@ -7,6 +7,8 @@ Place configuration templates and runtime defaults here.
 
 Notes:
 
+- MVP canonical base: store OHLCV at `1min`; derive `5min`/`15min`/`1h` runs via resampling.
+- Recommended benchmark/reproducibility base window (UTC): `2017-01-01T00:00:00Z` to `2025-12-31T23:59:59Z`.
 - `orders.size_mode`: `"qty"` (default) interprets action `size` as quantity; `"pct_equity"` interprets `size` as a fraction (0..=1) of equity (BUY) or position (SELL).
 - `execution.*`: modela a semântica de execução. Em `model="complete"`, o engine suporta `market|limit|stop`, latência determinística em barras, TIF (GTC/IOC/FOK) e cap de liquidez via `bar.volume`.
 - `features.sentiment_missing`: controls how missing/invalid sentiment values are handled: `"error"` (default), `"zero_fill"`, `"forward_fill"`, `"drop_row"`.
@@ -16,8 +18,8 @@ Notes:
 
 ## Sweeps (MVP+)
 
-Sweep configs live under `configs/sweeps/` and define a grid search over a base `config.toml`.
+Sweep configs live under `platform/ops/configs/sweeps/` and define a grid search over a base `config.toml`.
 
 Example:
 
-- `configs/sweeps/sma_grid.toml`
+- `platform/ops/configs/sweeps/sma_grid.toml`

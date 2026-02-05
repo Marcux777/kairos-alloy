@@ -4,9 +4,9 @@
 - Root-level docs capture the product and delivery scope: `README.md`, `PRD.md`, `STARTUP_PLAN.md`, and `Kairos_Alloy_PRD_MVP_v0_2.pdf`.
 - Container tooling lives at `Dockerfile` and `docker/entrypoint.sh` (copies Codex config into the container on startup).
 - Devcontainer settings are in `.devcontainer/devcontainer.json` for VS Code/Antigravity workflows.
-- Rust workspace lives under `crates/` (CLI, core, and ingestion tools).
-- Database migrations live under `migrations/`.
-- There is no application source tree yet. If you add code, introduce a clear top-level layout (for example `src/`, `tests/`, `configs/`) and update this guide.
+- Rust workspace is split into `apps/` (executables) and `platform/` (domain/application/infrastructure).
+- Operational assets live under `platform/ops/` (`configs/`, `migrations/`, `scripts/`, `observability/`).
+- Python reference agents live under `apps/agents/`.
 
 ## Build, Test, and Development Commands
 Use the Docker-based environment described in `README.md`:
@@ -34,7 +34,7 @@ Use the Docker-based environment described in `README.md`:
 
 ## Config & Secrets
 - Keep secrets out of the repo. Use local `.env` or host-level secrets; do not commit credentials.
-- If the app needs config defaults, document the expected keys and example values in a sample file (for example `configs/.env.example`).
+- If the app needs config defaults, document the expected keys and example values in a sample file (for example `platform/ops/configs/.env.example`).
 
 ## Testing Guidelines
 - There is no test framework configured yet. When introducing code, add deterministic tests (unit and/or integration) and document how to run them in `README.md`.
@@ -44,12 +44,12 @@ Use the Docker-based environment described in `README.md`:
 - Use fixed random seeds in tests and backtests unless explicitly testing stochastic behavior.
 - Keep fixtures small and versioned; avoid relying on mutable external datasets without pinning versions.
 
-## Repository Layout (when code is introduced)
-- Consider a clear top-level layout once code exists, for example:
-  - `crates/` for Rust workspace members
-  - `tests/` for Rust tests or fixtures
-  - `configs/` for config templates and runtime defaults
-- Update this guide if a different layout is chosen.
+## Repository Layout
+- Top-level layout:
+  - `apps/` for runnable applications (`kairos-alloy`, `kairos-ingest`, `kairos-bench`) and Python agents
+  - `platform/` for Rust core crates and operational assets (`platform/ops/*`)
+  - `tests/` for cross-crate notes/fixtures when needed
+- Update this guide if the layout changes again.
 
 ## Commit & Pull Request Guidelines
 - Git history currently shows a Conventional Commit-style message (`chore: initial commit`). Follow that pattern: `type: short summary` (e.g., `feat: add backtest CLI skeleton`), and keep the subject imperative and under ~72 chars.

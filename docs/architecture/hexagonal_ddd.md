@@ -18,22 +18,26 @@ Historically, the MVP used a single “core” crate that mixed:
 - domain logic (engine/portfolio/risk/metrics/strategy/types)
 - IO concerns (Postgres OHLCV loader, filesystem sentiment loader, HTTP agent client)
 
-**Status:** the workspace has since been split into `kairos-domain`, `kairos-infrastructure`, and `kairos-application`, and the old `kairos-core` crate has been removed. The TUI is the user-facing interface and the `kairos-alloy` binary is built from the `kairos-tui` crate.
+**Status:** the workspace has since been split into `kairos-domain`, `kairos-infrastructure`, and `kairos-application`, and the old `kairos-core` crate has been removed. The TUI is the user-facing interface and the `kairos-alloy` binary is built from the `kairos-alloy` crate.
 
 ## Target workspace layout
 
 ```
-crates/
+apps/
+  kairos-alloy/            # TUI interface (user-facing)
+  kairos-ingest/           # ingestion tool
+  kairos-bench/            # synthetic benchmark tool
+
+platform/
   kairos-domain/           # pure domain (no IO)
   kairos-application/      # use cases / orchestration
   kairos-infrastructure/   # adapters (Postgres/filesystem/HTTP)
-  kairos-tui/              # TUI interface (user-facing)
-  kairos-ingest/           # ingestion tool (kept as tool crate)
+  ops/                     # configs, scripts, migrations, observability
 ```
 
 ### Dependency rules (strict)
 ```
-kairos-tui  -> kairos-application -> kairos-domain
+kairos-alloy -> kairos-application -> kairos-domain
 kairos-infrastructure -----------> kairos-domain
 kairos-ingest -> kairos-infrastructure (optional) OR -> its own adapters
 ```
@@ -198,7 +202,7 @@ Adapters live in `kairos-infrastructure/src/`:
 ## Migration plan (incremental, safe)
 
 ### Phase 0 — Preparation (completed)
-- Crates created: `crates/kairos-domain`, `crates/kairos-application`, `crates/kairos-infrastructure`
+- Crates created: `platform/kairos-domain`, `platform/kairos-application`, `platform/kairos-infrastructure`
 - `kairos-core` removed from the workspace
 
 ### Phase 1 — Extract ports + adapters (completed)
@@ -213,7 +217,7 @@ Acceptance criteria:
 
 ### Phase 2 — Introduce application use cases
 1. Implement `RunBacktest` and `ValidateData` in `kairos-application`.
-2. Update `kairos-tui` to call application use cases instead of orchestrating directly.
+2. Update `kairos-alloy` to call application use cases instead of orchestrating directly.
 
 Acceptance criteria:
 - CLI behavior unchanged (golden files / integration tests remain green).

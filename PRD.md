@@ -207,8 +207,8 @@ Response:
 
 **Ferramentas oficiais de referência (repo)**
 
-- `tools/agent-dummy`: agente HTTP mínimo para smoke tests / golden path.
-- `tools/agent-llm`: agente LLM (ex.: Gemini) compatível com o contrato, com **cadência** (chamar o LLM a cada N barras) + cache **record/replay** para reduzir custo e tornar backtests determinísticos.
+- `apps/agents/agent-dummy`: agente HTTP mínimo para smoke tests / golden path.
+- `apps/agents/agent-llm`: agente LLM (ex.: Gemini) compatível com o contrato, com **cadência** (chamar o LLM a cada N barras) + cache **record/replay** para reduzir custo e tornar backtests determinísticos.
 
 **LLM: desafios e mitigação (quando aplicável)**
 
@@ -296,27 +296,29 @@ Cronograma alinhado às fases de implementação/validação do plano de trabalh
 
 ## 12. Questões em aberto (para fechar na primeira sprint)
 
-- Timeframe alvo do MVP (1-min, 5-min, 1h) para o backtest principal.
-- Decisão de fonte primária de OHLCV (MT5 vs KuCoin Spot/Futures), pares e período de coleta.
-- Schema do banco de OHLCV (campos finais, tipos, particionamento e índices).
-- Conjunto mínimo de features para observation e como representar sentimento (score único vs múltiplos sinais).
-- Política de slippage e fee (fixo, percentual, spread).
-- Definição final do vetor observation: campos, ordem, tipos e responsabilidade de normalização (Rust vs Python).
-- Decisão de protocolo para o agente em produção: HTTP keep-alive (MVP) e critérios para migrar para gRPC/ZeroMQ (pós-MVP).
-- Definição de sentiment_lag (segundos/minutos) e regra exata de alinhamento sentimento->barra.
+Status em **2026-02-05**: decisões fechadas para o MVP.
 
-### Tabela de decisões em aberto
+- **Timeframe alvo do MVP:** `1min` como granularidade canônica de ingestão e execução. Timeframes maiores (`5min`, `15min`, `1h`) são derivados por resampling a partir de `1min`.
+- **Fonte primária de OHLCV:** KuCoin Spot (`exchange=kucoin`, `market=spot`), com par padrão `BTC-USDT` no MVP; período-base recomendado para benchmark/reprodutibilidade: `2017-01-01T00:00:00Z` a `2025-12-31T23:59:59Z`.
+- **Schema de banco (MVP):** manter `ohlcv_candles` conforme migration `0001`, sem particionamento no MVP, com `PRIMARY KEY (exchange, market, symbol, timeframe, timestamp_utc)` e índice `(symbol, timeframe, timestamp_utc)`.
+- **Conjunto mínimo de features (MVP):** `return_mode=log`, `sma_windows=[10,50]`, `volatility_windows=[10]`, `rsi_enabled=false`, sentimento como `score` numérico único (com suporte a múltiplas colunas sem alterar contrato).
+- **Política de custos (MVP):** fee e slippage percentuais em bps por execução (`costs.fee_bps`, `costs.slippage_bps`) e spread opcional (`execution.spread_bps`), com defaults recomendados `fee_bps=10`, `slippage_bps=5`, `spread_bps=0`.
+- **Vetor de observation (v1):** ordem fixa `retorno`, `SMA` (na ordem de `sma_windows`), `volatilidade` (na ordem de `volatility_windows`), `RSI` (se habilitado), `sentimento` (na ordem do schema carregado). Tipo numérico: `f64`. Normalização permanece no agente Python.
+- **Protocolo do agente (MVP):** HTTP/JSON com keep-alive (`POST /v1/act`, opcional `POST /v1/act_batch`), versionado por `api_version=v1` e `feature_version=v1`; fallback em falha: `HOLD`.
+- **Regra final de sentiment_lag:** default operacional `5m`; para cada barra `t`, usar apenas sentimento com `timestamp <= (t - sentiment_lag)`.
 
-| Questão | Impacto | Responsável |
-| --- | --- | --- |
-| Timeframe alvo do MVP (1-min, 5-min, 1h) para o backtest principal | Define granularidade, volume de dados e performance do engine | A definir |
-| Fonte primária de OHLCV (MT5 vs KuCoin Spot/Futures), pares e período | Define pipeline de coleta e volume de dados | A definir |
-| Schema do banco de OHLCV (campos, tipos, particionamento e índices) | Afeta ingestão, performance e compatibilidade | A definir |
-| Conjunto mínimo de features para observation e representação de sentimento | Base da interface com o agente e comparabilidade de experimentos | A definir |
-| Política de slippage e fee (fixo, percentual, spread) | Impacta métricas e realismo do backtest | A definir |
-| Definição final do vetor observation (campos, ordem, tipos, normalização) | Contrato entre Rust e Python; risco de retrabalho | A definir |
-| Protocolo do agente em produção (HTTP vs gRPC/ZeroMQ) | Latência e throughput em backtests rápidos | A definir |
-| Definição de sentiment_lag e regra de alinhamento sentimento->barra | Evita look-ahead bias e garante reprodutibilidade | A definir |
+### Tabela de decisões fechadas
+
+| Questão | Decisão (MVP) | Impacto | Responsável |
+| --- | --- | --- | --- |
+| Timeframe alvo do MVP (1-min, 5-min, 1h) para o backtest principal | `1min` canônico; timeframes maiores por resampling | Define granularidade, volume de dados e performance do engine | Produto + Engenharia Kairos |
+| Fonte primária de OHLCV (MT5 vs KuCoin Spot/Futures), pares e período | KuCoin Spot, `BTC-USDT`, janela base 2017-01-01..2025-12-31 (UTC) | Define pipeline de coleta e volume de dados | Data/Infra Kairos |
+| Schema do banco de OHLCV (campos, tipos, particionamento e índices) | `ohlcv_candles` da migration `0001`, sem particionamento no MVP | Afeta ingestão, performance e compatibilidade | Data/Infra Kairos |
+| Conjunto mínimo de features para observation e representação de sentimento | Retorno log + SMA[10,50] + Vol[10] + sentimento `score` (RSI opcional) | Base da interface com o agente e comparabilidade de experimentos | Engine + Research Kairos |
+| Política de slippage e fee (fixo, percentual, spread) | Custos percentuais em bps (`fee_bps`, `slippage_bps`) + `spread_bps` opcional | Impacta métricas e realismo do backtest | Engine Kairos |
+| Definição final do vetor observation (campos, ordem, tipos, normalização) | Ordem fixa v1; `f64`; normalização no Python | Contrato entre Rust e Python; reduz risco de retrabalho | Engine + Agents Kairos |
+| Protocolo do agente em produção (HTTP vs gRPC/ZeroMQ) | HTTP/JSON keep-alive no MVP; reavaliar pós-MVP via profiling/throughput | Latência e throughput em backtests rápidos | Agents/Platform Kairos |
+| Definição de sentiment_lag e regra de alinhamento sentimento->barra | `sentiment_lag=5m` (default), com regra `ts_sent <= ts_bar - lag` | Evita look-ahead bias e garante reprodutibilidade | Research + Engine Kairos |
 
 ## 13. Referência interna
 
@@ -457,8 +459,8 @@ Restrições e convenções (MVP):
 - Cliente HTTP envia observation e recebe action.
 - Fallback HOLD em timeout.
 - O agente pode retornar `reason` (opcional) para interpretabilidade/auditoria; o engine usa apenas `action_type` e `size`.
-- Existe “golden path” validado com `tools/agent-dummy`.
-- Existe agente LLM de referência (`tools/agent-llm`) com modo mock (sem API key) e modo live.
+- Existe “golden path” validado com `apps/agents/agent-dummy`.
+- Existe agente LLM de referência (`apps/agents/agent-llm`) com modo mock (sem API key) e modo live.
 
 ### 17.7 Report
 
@@ -535,8 +537,8 @@ Papéis compradores/usuários típicos:
 - Binário Único (`kairos-alloy`) que contém a aplicação TUI.
 - Bibliotecas internas (crates) reutilizáveis (core/data/features/engine/risk/agents/report/cli).
 - Esquema versionado do contrato com o agente (JSON) e exemplos de requests/responses.
-- Agentes de referência (repo): `tools/agent-dummy` e `tools/agent-llm` (para validação e integração).
-- Ferramentas de reprodutibilidade: `scripts/compare_runs.py` (comparação determinística de artefatos entre runs).
+- Agentes de referência (repo): `apps/agents/agent-dummy` e `apps/agents/agent-llm` (para validação e integração).
+- Ferramentas de reprodutibilidade: `platform/ops/scripts/compare_runs.py` (comparação determinística de artefatos entre runs).
 - Experimentos: `--mode sweep` (grid de parâmetros + splits + leaderboard).
 
 ### 23.2 Modos de entrega (B2B)
@@ -780,7 +782,7 @@ Como diretriz de produto para reduzir atrito regulatório no início:
 
 ```toml
 [run]
-run_id = "btc_1m_2024q1"
+run_id = "btc_1m_2017_2025"
 symbol = "BTCUSD"
 timeframe = "1m"
 initial_capital = 10000.0
@@ -828,7 +830,7 @@ feature_version = "v1"
 {
   "api_version": "v1",
   "feature_version": "v1",
-  "run_id": "btc_1m_2024q1",
+  "run_id": "btc_1m_2017_2025",
   "timestamp": "2026-01-01T00:00:00Z",
   "symbol": "BTCUSD",
   "timeframe": "1m",

@@ -6,21 +6,21 @@ implemented with the Python standard library.
 ## Run (mock mode, no API key)
 
 ```bash
-python3 tools/agent_llm.py --llm-mode mock
+python3 apps/agents/agent-llm/agent_llm.py --llm-mode mock
 ```
 
 ## Run (live Gemini)
 
 ```bash
 export GEMINI_API_KEY="CHANGE_ME"
-python3 tools/agent_llm.py --llm-mode live --provider gemini
+python3 apps/agents/agent-llm/agent_llm.py --llm-mode live --provider gemini
 ```
 
 ## Run (live OpenAI)
 
 ```bash
 export OPENAI_API_KEY="CHANGE_ME"
-python3 tools/agent_llm.py --llm-mode live --provider openai --model gpt-4o-mini
+python3 apps/agents/agent-llm/agent_llm.py --llm-mode live --provider openai --model gpt-4o-mini
 ```
 
 Defaults:

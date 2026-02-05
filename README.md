@@ -40,8 +40,8 @@ cargo run -p kairos-ingest -- ingest-kucoin \
   --symbol BTC-USDT \
   --market spot \
   --timeframe 1min \
-  --start 2024-01-01T00:00:00Z \
-  --end 2024-01-02T00:00:00Z
+  --start 2017-01-01T00:00:00Z \
+  --end 2017-01-02T00:00:00Z
 ```
 
 Esperado: o comando de ingestao termina sem erro e passa a existir OHLCV para o par/timeframe no DB.
@@ -49,17 +49,17 @@ Esperado: o comando de ingestao termina sem erro e passa a existir OHLCV para o 
 ### 4) Rodar um agente dummy + backtest via agente
 
 ```bash
-python3 tools/agent-dummy/agent_dummy.py --host 127.0.0.1 --port 8000 --mode tiny_buy &
-cargo run -p kairos-tui --
+python3 apps/agents/agent-dummy/agent_dummy.py --host 127.0.0.1 --port 8000 --mode tiny_buy &
+cargo run -p kairos-alloy --
 ```
 
 Opcional: rodar um agente LLM (Gemini) em modo mock (sem API key):
 
 ```bash
-python3 tools/agent_llm.py --llm-mode mock &
+python3 apps/agents/agent-llm/agent_llm.py --llm-mode mock &
 ```
 
-Depois, na TUI, selecione `configs/llm_gemini.toml` (ou rode headless com `--config configs/llm_gemini.toml`).
+Depois, na TUI, selecione `platform/ops/configs/llm_gemini.toml` (ou rode headless com `--config platform/ops/configs/llm_gemini.toml`).
 
 ### 5) Ver os artefatos gerados
 
@@ -76,7 +76,7 @@ O run escreve em `runs/<run_id>/` (ex.: `runs/quickstart_btc_usdt_1min/`):
 ## TUI (MVP): comandos e exemplos
 
 ```bash
-cargo run -p kairos-tui --
+cargo run -p kairos-alloy --
 ```
 
 O que esperar:
@@ -92,26 +92,26 @@ O que esperar:
 Rodar sem abrir TUI (stdout = 1 linha JSON; exit code != 0 em falhas):
 
 ```bash
-cargo run -p kairos-tui -- --headless --mode validate --config configs/sample.toml --strict
-cargo run -p kairos-tui -- --headless --mode backtest --config configs/sample.toml
-cargo run -p kairos-tui -- --headless --mode paper --config configs/sample.toml
-cargo run -p kairos-tui -- --headless --mode report --config configs/sample.toml --run-dir runs/<run_id>
-cargo run -p kairos-tui -- --headless --mode sweep --sweep-config configs/sweeps/sma_grid.toml
+cargo run -p kairos-alloy -- --headless --mode validate --config platform/ops/configs/sample.toml --strict
+cargo run -p kairos-alloy -- --headless --mode backtest --config platform/ops/configs/sample.toml
+cargo run -p kairos-alloy -- --headless --mode paper --config platform/ops/configs/sample.toml
+cargo run -p kairos-alloy -- --headless --mode report --config platform/ops/configs/sample.toml --run-dir runs/<run_id>
+cargo run -p kairos-alloy -- --headless --mode sweep --sweep-config platform/ops/configs/sweeps/sma_grid.toml
 ```
 
 ## Experimentos (determinismo)
 
 Workflow recomendado:
 
-1) Rode a TUI: `cargo run -p kairos-tui --`
-2) Setup: selecione uma config em `configs/` (ou recente)
+1) Rode a TUI: `cargo run -p kairos-alloy --`
+2) Setup: selecione uma config em `platform/ops/configs/` (ou recente)
 3) (Opcional) Ative o gate `v` e rode **Validate** antes de rodar Backtest/Paper
 4) Rode Backtest/Paper e verifique os artefatos em `runs/<run_id>/`
 
 Comparar dois runs:
 
 ```bash
-scripts/compare_runs.py runs/<run_a> runs/<run_b>
+platform/ops/scripts/compare_runs.py runs/<run_a> runs/<run_b>
 ```
 
 O comparador valida `equity.csv`, `trades.csv` e `summary.json` (com normalizacao que ignora `run_id` e `config_snapshot`).
@@ -127,7 +127,7 @@ Veja: `notebooks/README.md`.
 
 Para pesquisa (DRL/Gym), existe um wrapper Python que reaproveita o contrato HTTP do agente:
 
-- `tools/kairos_gym.py`: servidor `/v1/act` que bloqueia por passo e permite um loop `reset/step` (1 step = 1 candle).
+- `apps/agents/kairos-gym/kairos_gym.py`: servidor `/v1/act` que bloqueia por passo e permite um loop `reset/step` (1 step = 1 candle).
 
 Este wrapper foi desenhado para suportar o pipeline acadêmico (ARTIGOS 2–6) sem exigir mudanças no Rust.
 
@@ -135,17 +135,17 @@ Este wrapper foi desenhado para suportar o pipeline acadêmico (ARTIGOS 2–6) s
 
 Para rodar um agente treinado (ex.: Stable-Baselines3) via o mesmo contrato HTTP:
 
-- `tools/agent_drl.py` (wrapper; implementacao em `tools/agent-drl/agent_drl.py`)
+- `apps/agents/agent-drl/agent_drl.py`
 
 Isso permite apontar `agent.url` para o servidor DRL e validar no backtest/paper sem alterar o Rust.
 
-## Configuracao (`configs/*.toml`)
+## Configuracao (`platform/ops/configs/*.toml`)
 
 Arquivos prontos:
 
-- `configs/quickstart.toml`: caminho mais curto para rodar (bom para onboarding).
-- `configs/sample.toml`: modelo completo (espelha o PRD MVP).
-- `configs/README.md`: notas sobre chaves e semantica (orders/execution/features).
+- `platform/ops/configs/quickstart.toml`: caminho mais curto para rodar (bom para onboarding).
+- `platform/ops/configs/sample.toml`: modelo completo (espelha o PRD MVP).
+- `platform/ops/configs/README.md`: notas sobre chaves e semantica (orders/execution/features).
 
 Checklist rapido do que editar:
 
@@ -154,6 +154,12 @@ Checklist rapido do que editar:
 - `[paths]`: `sentiment_path` (opcional), `out_dir`
 - `[execution]`: `model`, `tif`, `latency_bars`, `max_fill_pct_of_volume`
 - `[features]`: `return_mode`, `sma_windows`, `rsi_enabled`, `sentiment_lag`, `sentiment_missing`
+
+Padrao recomendado do MVP:
+
+- Ingestao canonica em `1min` (base de dados primaria).
+- Timeframes maiores (`5min`, `15min`, `1h`) derivados por resampling a partir de `1min`.
+- Janela base de benchmark/reprodutibilidade: `2017-01-01T00:00:00Z` ate `2025-12-31T23:59:59Z`.
 
 `features.sentiment_missing` aceita:
 
@@ -231,12 +237,12 @@ Métricas (Prometheus):
 Subir Prometheus + Grafana (dashboards provisionados):
 
 ```bash
-docker compose -f observability/docker-compose.observability.yml up -d
+docker compose -f platform/ops/observability/docker-compose.observability.yml up -d
 ```
 
 Alertas:
 
-- Prometheus carrega regras em `observability/prometheus/alerts.yml` (veja em `http://localhost:9090/alerts`).
+- Prometheus carrega regras em `platform/ops/observability/prometheus/alerts.yml` (veja em `http://localhost:9090/alerts`).
 
 Rodar o benchmark com métricas:
 
@@ -260,9 +266,27 @@ cargo run -p kairos-ingest -- ingest-kucoin \
   --symbol BTC-USDT \
   --market spot \
   --timeframe 1min \
-  --start 2024-01-01T00:00:00Z \
-  --end 2024-02-01T00:00:00Z
+  --start 2017-01-01T00:00:00Z \
+  --end 2025-12-31T23:59:59Z
 ```
+
+Para reduzir tempo de ingestao, voce pode rodar por janelas anuais mantendo o mesmo timeframe base (`1min`).
+
+Script pronto para baseline anual `2017..2025`:
+
+```bash
+export KAIROS_DB_URL="postgres://kairos:$KAIROS_DB_PASSWORD@localhost:5432/$KAIROS_DB_NAME"
+./platform/ops/scripts/ingest-baseline-2017-2025.sh
+```
+
+Variaveis opcionais do script:
+
+- `KAIROS_SYMBOL` (default: `BTC-USDT`)
+- `KAIROS_MARKET` (default: `spot`)
+- `KAIROS_TIMEFRAME` (default: `1min`)
+- `KAIROS_START_YEAR` (default: `2017`)
+- `KAIROS_END_YEAR` (default: `2025`)
+- `KAIROS_SKIP_MIGRATE=1` para pular `migrate`
 
 ## Ambiente de construção (Docker)
 
@@ -284,12 +308,10 @@ docker compose build dev
 
 ### Limpeza de diretórios `*.root-owned`
 
-Se você já rodou o repo com container como root, podem existir cópias `*.root-owned/` (ex.: `target.root-owned/`). Elas são ignoradas pelo git, mas podem ser removidas do filesystem:
+Se você já rodou o repo com container como root, podem existir cópias `*.root-owned/` (ex.: `target.root-owned/`). Elas são ignoradas pelo git e podem ser removidas com:
 
 ```bash
-sudo rm -rf \
-  .configs.root-owned .crates.root-owned .docs.root-owned .github.root-owned .migrations.root-owned .scripts.root-owned .serena.root-owned .target.root-owned .tests.root-owned .tools.root-owned \
-  configs.root-owned crates.root-owned docs.root-owned migrations.root-owned scripts.root-owned target.root-owned tests.root-owned tools.root-owned
+./platform/ops/scripts/cleanup-root-owned.sh
 ```
 
 Build da imagem:
@@ -347,7 +369,7 @@ cargo test --workspace --locked
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Para rodar `kairos-ingest`/`validate`/`backtest` com dados reais, você precisa de um PostgreSQL acessível e `db.url` ajustado no `configs/*.toml`.
+Para rodar `kairos-ingest`/`validate`/`backtest` com dados reais, você precisa de um PostgreSQL acessível e `db.url` ajustado no `platform/ops/configs/*.toml`.
 
 ## Testes
 
@@ -357,7 +379,7 @@ cargo test -p kairos-ingest
 
 ## Testes E2E (PRD20 / Postgres)
 
-Os E2E PRD20 vivem em `crates/kairos-application/tests/prd20_integration.rs` e ficam desabilitados por padrao.
+Os E2E PRD20 vivem em `platform/kairos-application/tests/prd20_integration.rs` e ficam desabilitados por padrao.
 Para habilitar, exporte `KAIROS_DB_RUN_TESTS=1` e forneca `KAIROS_DB_URL`.
 
 Dentro do compose (subindo o Postgres local):
@@ -397,7 +419,7 @@ O workflow `Perf Bench` (`.github/workflows/perf-bench.yml`) roda diariamente (s
 Para rodar os mesmos “gates” de supply-chain/segurança localmente (quando aplicável):
 
 ```bash
-./scripts/security-check.sh
+./platform/ops/scripts/security-check.sh
 ```
 
 ## Troubleshooting
