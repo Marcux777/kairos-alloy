@@ -131,6 +131,14 @@ Para pesquisa (DRL/Gym), existe um wrapper Python que reaproveita o contrato HTT
 
 Este wrapper foi desenhado para suportar o pipeline acadêmico (ARTIGOS 2–6) sem exigir mudanças no Rust.
 
+## Agent DRL (playback / inferência)
+
+Para rodar um agente treinado (ex.: Stable-Baselines3) via o mesmo contrato HTTP:
+
+- `tools/agent_drl.py` (wrapper; implementacao em `tools/agent-drl/agent_drl.py`)
+
+Isso permite apontar `agent.url` para o servidor DRL e validar no backtest/paper sem alterar o Rust.
+
 ## Configuracao (`configs/*.toml`)
 
 Arquivos prontos:

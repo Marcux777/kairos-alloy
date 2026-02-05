@@ -322,6 +322,8 @@ class KairosGymEnv:
         ]
 
         self._proc: Optional[subprocess.Popen] = None
+        self._proc_stdout = None
+        self._proc_stderr = None
         self._current_call: Optional[_ActionCall] = None
         self._prev_equity: Optional[float] = None
         self._obs_len: Optional[int] = None
@@ -378,6 +380,7 @@ class KairosGymEnv:
         return _hold("invalid_action")
 
     def _spawn_rust(self, config_path: Path, sweep_path: Optional[Path]) -> subprocess.Popen:
+        repo_root = Path(__file__).resolve().parent.parent
         cmd = list(self._rust_cmd)
         if self.mode == "sweep" or sweep_path is not None:
             # Ensure we use sweep mode and pass sweep config.
@@ -399,9 +402,14 @@ class KairosGymEnv:
 
         stdout_path = (config_path.parent / "rust_stdout.log").as_posix()
         stderr_path = (config_path.parent / "rust_stderr.log").as_posix()
-        stdout = open(stdout_path, "wb")
-        stderr = open(stderr_path, "wb")
-        return subprocess.Popen(cmd, cwd=str(self.base_config_path.parent), stdout=stdout, stderr=stderr)
+        self._proc_stdout = open(stdout_path, "wb")
+        self._proc_stderr = open(stderr_path, "wb")
+        return subprocess.Popen(
+            cmd,
+            cwd=str(repo_root),
+            stdout=self._proc_stdout,
+            stderr=self._proc_stderr,
+        )
 
     def _wait_for_call_or_done(self, timeout_s: float) -> Optional[_ActionCall]:
         deadline = time.time() + timeout_s
@@ -539,6 +547,18 @@ class KairosGymEnv:
                         self._proc.wait(timeout=2.0)
             finally:
                 self._proc = None
+                if self._proc_stdout is not None:
+                    try:
+                        self._proc_stdout.close()
+                    except Exception:
+                        pass
+                    self._proc_stdout = None
+                if self._proc_stderr is not None:
+                    try:
+                        self._proc_stderr.close()
+                    except Exception:
+                        pass
+                    self._proc_stderr = None
 
     def close(self) -> None:
         self.close_episode()
@@ -625,4 +645,3 @@ def _cli() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_cli())
-
