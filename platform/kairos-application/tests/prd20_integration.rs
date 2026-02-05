@@ -234,8 +234,8 @@ fn build_market_repo(db_url: &str) -> PostgresMarketDataRepository {
         .expect("market repo")
 }
 
-#[tokio::test]
-async fn prd20_e2e_ingest_then_backtest_csv_sentiment() {
+#[test]
+fn prd20_e2e_ingest_then_backtest_csv_sentiment() {
     if !should_run_db_tests() {
         return;
     }
@@ -251,27 +251,34 @@ async fn prd20_e2e_ingest_then_backtest_csv_sentiment() {
 
     let migrations_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../ops/migrations/0001_create_ohlcv_candles.sql");
-    migrate_db(&db_url, migrations_path.as_path())
-        .await
-        .expect("migrate");
-
     let payload = kucoin_spot_payload();
     let server = MockKucoinServer::start_spot(payload);
-    ingest_kucoin(
-        &db_url,
-        &symbol,
-        Market::Spot,
-        "1min",
-        "2024-01-01T00:00:00Z",
-        Some("2024-01-01T00:05:00Z"),
-        &exchange,
-        "mock",
-        0,
-        100,
-        Some(&server.base_url),
-    )
-    .await
-    .expect("ingest");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    rt.block_on(async {
+        migrate_db(&db_url, migrations_path.as_path())
+            .await
+            .expect("migrate");
+
+        ingest_kucoin(
+            &db_url,
+            &symbol,
+            Market::Spot,
+            "1min",
+            "2024-01-01T00:00:00Z",
+            Some("2024-01-01T00:05:00Z"),
+            &exchange,
+            "mock",
+            0,
+            100,
+            Some(&server.base_url),
+        )
+        .await
+        .expect("ingest");
+    });
+    drop(rt);
 
     let tmp_dir = std::env::temp_dir().join(format!("kairos_prd20_{suffix}"));
     let _ = fs::create_dir_all(&tmp_dir);
@@ -312,8 +319,8 @@ async fn prd20_e2e_ingest_then_backtest_csv_sentiment() {
     assert!(run_dir.join("logs.jsonl").exists());
 }
 
-#[tokio::test]
-async fn prd20_smoke_paper_json_sentiment() {
+#[test]
+fn prd20_smoke_paper_json_sentiment() {
     if !should_run_db_tests() {
         return;
     }
@@ -329,27 +336,34 @@ async fn prd20_smoke_paper_json_sentiment() {
 
     let migrations_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../ops/migrations/0001_create_ohlcv_candles.sql");
-    migrate_db(&db_url, migrations_path.as_path())
-        .await
-        .expect("migrate");
-
     let payload = kucoin_spot_payload();
     let server = MockKucoinServer::start_spot(payload);
-    ingest_kucoin(
-        &db_url,
-        &symbol,
-        Market::Spot,
-        "1min",
-        "2024-01-01T00:00:00Z",
-        Some("2024-01-01T00:05:00Z"),
-        &exchange,
-        "mock",
-        0,
-        100,
-        Some(&server.base_url),
-    )
-    .await
-    .expect("ingest");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    rt.block_on(async {
+        migrate_db(&db_url, migrations_path.as_path())
+            .await
+            .expect("migrate");
+
+        ingest_kucoin(
+            &db_url,
+            &symbol,
+            Market::Spot,
+            "1min",
+            "2024-01-01T00:00:00Z",
+            Some("2024-01-01T00:05:00Z"),
+            &exchange,
+            "mock",
+            0,
+            100,
+            Some(&server.base_url),
+        )
+        .await
+        .expect("ingest");
+    });
+    drop(rt);
 
     let tmp_dir = std::env::temp_dir().join(format!("kairos_prd20_{suffix}"));
     let _ = fs::create_dir_all(&tmp_dir);
