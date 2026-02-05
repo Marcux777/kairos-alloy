@@ -15,6 +15,9 @@ python3 -m venv .venv-notebooks
 pip install -r notebooks/requirements.txt
 ```
 
+If you plan to train DRL agents, install `gymnasium` + your RL stack (e.g. Stable-Baselines3)
+in the same virtualenv. The Kairos engine remains the source of truth for execution and reward.
+
 ## Running
 
 Start Jupyter:
@@ -36,4 +39,3 @@ python3 -m papermill notebooks/artigo_02_benchmark.ipynb /tmp/out.ipynb -p RUN_I
   - `runs/<run_id>/paper/figures/`
 - Never store API keys or secrets in notebooks or artifacts.
 - If you need more metadata, add it to `runs/<run_id>/manifest.json` (future) and keep notebooks backward compatible.
-

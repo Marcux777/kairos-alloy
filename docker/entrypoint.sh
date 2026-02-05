@@ -8,5 +8,4 @@ if [ -d "$CODEX_SRC" ]; then
   mkdir -p "$CODEX_DST"
   cp -R "$CODEX_SRC"/. "$CODEX_DST"/
 fi
-
 exec "$@"

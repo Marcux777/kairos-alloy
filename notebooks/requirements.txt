@@ -8,6 +8,7 @@ numpy>=1.24
 pandas>=2.0
 matplotlib>=3.7
 toml>=0.10
+gymnasium>=0.29
 
 # Optional (uncomment as needed):
 # scipy>=1.10

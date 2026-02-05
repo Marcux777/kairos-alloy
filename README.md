@@ -123,6 +123,14 @@ e exportam tabelas/figuras de volta para `runs/<run_id>/paper/`.
 
 Veja: `notebooks/README.md`.
 
+## Kairos Gym (pesquisa / DRL)
+
+Para pesquisa (DRL/Gym), existe um wrapper Python que reaproveita o contrato HTTP do agente:
+
+- `tools/kairos_gym.py`: servidor `/v1/act` que bloqueia por passo e permite um loop `reset/step` (1 step = 1 candle).
+
+Este wrapper foi desenhado para suportar o pipeline acadêmico (ARTIGOS 2–6) sem exigir mudanças no Rust.
+
 ## Configuracao (`configs/*.toml`)
 
 Arquivos prontos:
