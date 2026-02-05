@@ -39,3 +39,25 @@ python3 -m papermill notebooks/artigo_02_benchmark.ipynb /tmp/out.ipynb -p RUN_I
   - `runs/<run_id>/paper/tables/`
 - Never store API keys or secrets in notebooks or artifacts.
 - If you need more metadata, add it to `runs/<run_id>/manifest.json` (future) and keep notebooks backward compatible.
+
+## CPCV (Sklearn)
+
+Kairos Alloy can generate CPCV folds in Rust and expose them to notebooks as a sklearn
+cross-validator:
+
+```python
+from pathlib import Path
+from _lib import KairosCPCV
+
+cv = KairosCPCV.generate(
+    config=Path("configs/your_config.toml"),
+    n_groups=6,
+    k_test=2,
+    horizon_bars=1,
+    purge_bars=0,
+    embargo_bars=0,
+)
+
+for train_idx, test_idx in cv.split(X):
+    ...
+```
