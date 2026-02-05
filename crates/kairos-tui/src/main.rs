@@ -13,7 +13,7 @@ struct Cli {
     #[arg(long)]
     headless: bool,
 
-    /// Headless mode: validate | backtest | paper | report | sweep
+    /// Headless mode: validate | backtest | paper | report | sweep | cpcv
     #[arg(long)]
     mode: Option<Mode>,
 
@@ -32,6 +32,38 @@ struct Cli {
     /// Sweep config file (sweep mode only).
     #[arg(long)]
     sweep_config: Option<PathBuf>,
+
+    /// Output path for CPCV folds CSV (cpcv mode only).
+    #[arg(long)]
+    cpcv_out: Option<PathBuf>,
+
+    /// Number of contiguous groups to split the time series into (cpcv mode only).
+    #[arg(long, default_value_t = 6)]
+    cpcv_n_groups: usize,
+
+    /// Number of groups held out for testing in each fold (cpcv mode only).
+    #[arg(long, default_value_t = 2)]
+    cpcv_k_test: usize,
+
+    /// Label/lookahead horizon (in bars) used for purge calculations (cpcv mode only).
+    #[arg(long, default_value_t = 1)]
+    cpcv_horizon_bars: usize,
+
+    /// Extra purge bars before each test segment (cpcv mode only).
+    #[arg(long, default_value_t = 0)]
+    cpcv_purge_bars: usize,
+
+    /// Embargo bars after each test segment (cpcv mode only).
+    #[arg(long, default_value_t = 0)]
+    cpcv_embargo_bars: usize,
+
+    /// Optional start timestamp filter (epoch seconds or RFC3339, inclusive) (cpcv mode only).
+    #[arg(long)]
+    cpcv_start: Option<String>,
+
+    /// Optional end timestamp filter (epoch seconds or RFC3339, inclusive) (cpcv mode only).
+    #[arg(long)]
+    cpcv_end: Option<String>,
 }
 
 #[derive(ValueEnum, Debug, Clone, Copy)]
@@ -41,6 +73,7 @@ enum Mode {
     Paper,
     Report,
     Sweep,
+    Cpcv,
 }
 
 fn main() {
@@ -71,6 +104,7 @@ fn main() {
             Mode::Paper => HeadlessMode::Paper,
             Mode::Report => HeadlessMode::Report,
             Mode::Sweep => HeadlessMode::Sweep,
+            Mode::Cpcv => HeadlessMode::Cpcv,
         };
 
         let config_path = match mode {
@@ -101,6 +135,14 @@ fn main() {
             strict: cli.strict,
             run_dir: cli.run_dir,
             sweep_config: cli.sweep_config,
+            cpcv_out: cli.cpcv_out,
+            cpcv_n_groups: cli.cpcv_n_groups,
+            cpcv_k_test: cli.cpcv_k_test,
+            cpcv_horizon_bars: cli.cpcv_horizon_bars,
+            cpcv_purge_bars: cli.cpcv_purge_bars,
+            cpcv_embargo_bars: cli.cpcv_embargo_bars,
+            cpcv_start: cli.cpcv_start,
+            cpcv_end: cli.cpcv_end,
         });
 
         match result {
