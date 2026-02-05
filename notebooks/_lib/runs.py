@@ -47,12 +47,10 @@ class RunArtifacts:
     def paper_dir(self) -> Path:
         return self.run_dir / "paper"
 
-    def ensure_paper_dirs(self) -> tuple[Path, Path]:
+    def ensure_tables_dir(self) -> Path:
         tables = self.paper_dir() / "tables"
-        figures = self.paper_dir() / "figures"
         tables.mkdir(parents=True, exist_ok=True)
-        figures.mkdir(parents=True, exist_ok=True)
-        return tables, figures
+        return tables
 
 
 def list_runs(
@@ -136,4 +134,3 @@ def select_runs_by_manifest(
             continue
         selected.append(r)
     return selected
-
