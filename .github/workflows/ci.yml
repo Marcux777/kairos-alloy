@@ -166,6 +166,9 @@ jobs:
           docker compose run --rm -T dev bash -lc '
             set -euo pipefail
 
+            export CARGO_TARGET_DIR=/tmp/kairos-target
+            mkdir -p "${CARGO_TARGET_DIR}"
+
             retry() {
               local attempts="$1"
               shift
