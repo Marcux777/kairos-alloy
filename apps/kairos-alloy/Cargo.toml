@@ -21,7 +21,7 @@ kairos-infrastructure = { path = "../../platform/kairos-infrastructure", version
 
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.30"
-crossterm = "0.28"
+crossterm = "0.29"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 parking_lot = "0.12"
 serde_json = "1"
