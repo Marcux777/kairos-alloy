@@ -1,6 +1,7 @@
 [run]
 run_id = "btc_usdt_1min_llm_mock"
 symbol = "BTC-USDT"
+# Canonical OHLCV base timeframe for MVP.
 timeframe = "1min"
 initial_capital = 10000.0
 

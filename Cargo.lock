@@ -1323,6 +1323,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "kairos-alloy"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "crossterm 0.28.1",
+ "kairos-application",
+ "kairos-domain",
+ "kairos-infrastructure",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "parking_lot",
+ "ratatui",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "kairos-application"
 version = "0.1.0"
 dependencies = [
@@ -1396,27 +1417,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-postgres",
-]
-
-[[package]]
-name = "kairos-tui"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "clap",
- "crossterm 0.28.1",
- "kairos-application",
- "kairos-domain",
- "kairos-infrastructure",
- "metrics",
- "metrics-exporter-prometheus",
- "parking_lot",
- "ratatui",
- "serde_json",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

@@ -25,7 +25,7 @@ exceptions = [
   { crate = "kairos-application", allow = ["LicenseRef-Proprietary"] },
   { crate = "kairos-infrastructure", allow = ["LicenseRef-Proprietary"] },
   { crate = "kairos-ingest", allow = ["LicenseRef-Proprietary"] },
-  { crate = "kairos-tui", allow = ["LicenseRef-Proprietary"] },
+  { crate = "kairos-alloy", allow = ["LicenseRef-Proprietary"] },
   { crate = "kairos-bench", allow = ["LicenseRef-Proprietary"] },
 ]
 

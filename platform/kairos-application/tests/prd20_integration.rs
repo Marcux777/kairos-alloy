@@ -250,7 +250,7 @@ async fn prd20_e2e_ingest_then_backtest_csv_sentiment() {
     let run_id = format!("e2e_backtest_{suffix}");
 
     let migrations_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../migrations/0001_create_ohlcv_candles.sql");
+        .join("../ops/migrations/0001_create_ohlcv_candles.sql");
     migrate_db(&db_url, migrations_path.as_path())
         .await
         .expect("migrate");
@@ -328,7 +328,7 @@ async fn prd20_smoke_paper_json_sentiment() {
     let run_id = format!("e2e_paper_{suffix}");
 
     let migrations_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../migrations/0001_create_ohlcv_candles.sql");
+        .join("../ops/migrations/0001_create_ohlcv_candles.sql");
     migrate_db(&db_url, migrations_path.as_path())
         .await
         .expect("migrate");

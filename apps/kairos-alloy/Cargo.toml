@@ -1,5 +1,5 @@
 [package]
-name = "kairos-tui"
+name = "kairos-alloy"
 version = "0.1.0"
 edition = "2021"
 description = "Terminal UI (TUI) for Kairos Alloy."
@@ -15,9 +15,9 @@ path = "src/main.rs"
  
 
 [dependencies]
-kairos-application = { path = "../kairos-application", version = "0.1.0" }
-kairos-domain = { path = "../kairos-domain", version = "0.1.0" }
-kairos-infrastructure = { path = "../kairos-infrastructure", version = "0.1.0" }
+kairos-application = { path = "../../platform/kairos-application", version = "0.1.0" }
+kairos-domain = { path = "../../platform/kairos-domain", version = "0.1.0" }
+kairos-infrastructure = { path = "../../platform/kairos-infrastructure", version = "0.1.0" }
 
 clap = { version = "4", features = ["derive"] }
 ratatui = "0.30"

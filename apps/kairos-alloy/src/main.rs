@@ -1,6 +1,6 @@
 use clap::{Parser, ValueEnum};
-use kairos_tui::headless::{HeadlessArgs, HeadlessMode};
-use kairos_tui::{logging, TuiOpts};
+use kairos_alloy::headless::{HeadlessArgs, HeadlessMode};
+use kairos_alloy::{logging, TuiOpts};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -129,7 +129,7 @@ fn main() {
             ),
         };
 
-        let result = kairos_tui::headless::run_headless(HeadlessArgs {
+        let result = kairos_alloy::headless::run_headless(HeadlessArgs {
             mode,
             config_path,
             strict: cli.strict,
@@ -180,7 +180,7 @@ fn main() {
         default_out_dir: PathBuf::from("runs"),
     };
 
-    if let Err(err) = kairos_tui::run(opts) {
+    if let Err(err) = kairos_alloy::run(opts) {
         eprintln!("error: {err}");
         std::process::exit(1);
     }

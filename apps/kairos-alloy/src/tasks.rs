@@ -540,7 +540,7 @@ fn run_paper_realtime(
         }
         #[cfg(not(feature = "realtime-kucoin"))]
         {
-            Err("kairos-tui was built without feature realtime-kucoin".to_string())
+            Err("kairos-alloy was built without feature realtime-kucoin".to_string())
         }
     };
 

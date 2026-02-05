@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+cd "$(dirname "${BASH_SOURCE[0]}")/../../.."
 
 if ! command -v cargo >/dev/null 2>&1; then
   echo "error: cargo is not installed / not on PATH" >&2
@@ -24,4 +24,3 @@ else
   echo "== cargo-audit (skipped) =="
   echo "hint: install with: cargo install cargo-audit" >&2
 fi
-

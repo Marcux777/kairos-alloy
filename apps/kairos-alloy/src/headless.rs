@@ -319,8 +319,7 @@ fn run_cpcv(
                 source_timeframe_label, timeframe_label
             ));
         }
-        let resampled_bars = resample_bars(&source_bars, expected_step)?;
-        resampled_bars
+        resample_bars(&source_bars, expected_step)?
     } else {
         source_bars
     };

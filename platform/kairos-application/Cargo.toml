@@ -18,5 +18,5 @@ chrono = "0.4"
 
 [dev-dependencies]
 kairos-infrastructure = { path = "../kairos-infrastructure", version = "0.1.0" }
-kairos-ingest = { path = "../kairos-ingest", version = "0.1.0" }
+kairos-ingest = { path = "../../apps/kairos-ingest", version = "0.1.0" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

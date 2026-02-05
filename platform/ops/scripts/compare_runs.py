@@ -8,7 +8,7 @@ Checks:
   - summary.json (exact match after normalizing volatile fields)
 
 Usage:
-  scripts/compare_runs.py /path/to/runA /path/to/runB
+  platform/ops/scripts/compare_runs.py /path/to/runA /path/to/runB
 """
 
 from __future__ import annotations
@@ -135,4 +135,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

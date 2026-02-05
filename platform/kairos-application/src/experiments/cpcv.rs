@@ -212,8 +212,8 @@ fn compute_train_segments(
 
     let mut is_test = vec![false; total];
     for &(s, e) in test_ranges {
-        for idx in s..=e {
-            is_test[idx] = true;
+        for flag in is_test.iter_mut().take(e + 1).skip(s) {
+            *flag = true;
         }
     }
 
@@ -233,8 +233,8 @@ fn compute_train_segments(
     for &(s, e) in test_ranges {
         let block_start = s.saturating_sub(purge_left);
         let block_end = (e + purge_right).min(total - 1);
-        for idx in block_start..=block_end {
-            blocked[idx] = true;
+        for flag in blocked.iter_mut().take(block_end + 1).skip(block_start) {
+            *flag = true;
         }
     }
 

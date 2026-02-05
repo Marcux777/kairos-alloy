@@ -1,15 +1,19 @@
 use crate::logging::LogStore;
-use crate::tasks::{AgentLlmRuntime, StreamStatusSample, TaskEvent, TaskKind, TaskRunner, TradeSample};
+use crate::tasks::{
+    AgentLlmRuntime, StreamStatusSample, TaskEvent, TaskKind, TaskRunner, TradeSample,
+};
 use crossterm::event::{Event as CtEvent, KeyCode, KeyEvent, KeyModifiers};
 use std::collections::VecDeque;
 use std::net::{TcpStream, ToSocketAddrs};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::Instant;
 
 const MAX_SERIES_POINTS: usize = 600;
 const MAX_TRADES: usize = 200;
+const DEFAULT_CONFIG_DIR: &str = "platform/ops/configs";
+const DEFAULT_AGENT_LLM_SCRIPT: &str = "apps/agents/agent-llm/agent_llm.py";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewId {
@@ -945,7 +949,9 @@ impl App {
             if field == QuickEditField::LlmProvider {
                 let v = raw.to_lowercase();
                 if !(v.is_empty() || v == "none" || v == "gemini" || v == "openai") {
-                    self.set_error_and_clear_info("llm_provider must be one of: none|gemini|openai");
+                    self.set_error_and_clear_info(
+                        "llm_provider must be one of: none|gemini|openai",
+                    );
                     return;
                 }
                 self.quick_edit.llm_provider =
@@ -971,7 +977,8 @@ impl App {
             }
 
             self.last_error = None;
-            self.info_message = Some("LLM runtime setting updated (not saved to config)".to_string());
+            self.info_message =
+                Some("LLM runtime setting updated (not saved to config)".to_string());
             self.info_expires_at = Some(Instant::now() + std::time::Duration::from_secs(2));
             return;
         }
@@ -1054,7 +1061,12 @@ impl App {
 
     fn try_load_selected_config(&mut self) {
         let Some(path) = self.available_configs.get(self.selected_config).cloned() else {
-            self.last_error = Some("no configs found under configs/ or recents".to_string());
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let config_dir = resolve_config_dir(cwd.as_path());
+            self.last_error = Some(format!(
+                "no configs found under {} or recents",
+                config_dir.display()
+            ));
             return;
         };
         self.config_input = TextInput::new(path.display().to_string());
@@ -1063,7 +1075,7 @@ impl App {
 
     fn refresh_available_configs(&mut self) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let configs_dir = cwd.join("configs");
+        let configs_dir = resolve_config_dir(cwd.as_path());
         let mut configs: Vec<PathBuf> = Vec::new();
         if let Ok(entries) = std::fs::read_dir(&configs_dir) {
             for entry in entries.flatten() {
@@ -1241,13 +1253,16 @@ impl App {
             return Ok(());
         }
 
-        let script = PathBuf::from("tools/agent_llm.py");
+        let script = resolve_managed_agent_script();
         if !script.exists() {
-            return Err("managed agent requires tools/agent_llm.py (dev checkout). Run the agent yourself and set agent.url.".to_string());
+            return Err(format!(
+                "managed agent requires {} (dev checkout). Run the agent yourself and set agent.url.",
+                script.display()
+            ));
         }
 
         let mut cmd = Command::new("python3");
-        cmd.arg("tools/agent_llm.py")
+        cmd.arg(script.as_os_str())
             .arg("--llm-mode")
             .arg("live")
             .arg("--provider")
@@ -1354,6 +1369,33 @@ fn port_is_open(host: &str, port: u16) -> bool {
         }
     }
     false
+}
+
+fn resolve_config_dir(cwd: &Path) -> PathBuf {
+    if let Ok(raw) = std::env::var("KAIROS_CONFIG_DIR") {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            let path = PathBuf::from(trimmed);
+            return if path.is_absolute() {
+                path
+            } else {
+                cwd.join(path)
+            };
+        }
+    }
+    cwd.join(DEFAULT_CONFIG_DIR)
+}
+
+fn resolve_managed_agent_script() -> PathBuf {
+    if let Ok(raw) = std::env::var("KAIROS_AGENTS_DIR") {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed)
+                .join("agent-llm")
+                .join("agent_llm.py");
+        }
+    }
+    PathBuf::from(DEFAULT_AGENT_LLM_SCRIPT)
 }
 
 fn recent_store_path() -> Option<PathBuf> {

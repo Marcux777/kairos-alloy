@@ -1,6 +1,7 @@
 [run]
-run_id = "btc_usdt_1min_2024q1"
+run_id = "btc_usdt_1min_2017_2025"
 symbol = "BTC-USDT"
+# Canonical OHLCV base timeframe for MVP.
 timeframe = "1min"
 initial_capital = 10000.0
 
@@ -15,6 +16,7 @@ market = "spot"
 # Optional: if your DB stores a smaller timeframe (e.g. "1min") but you want to run at "5min",
 # set this to the stored timeframe and Kairos Alloy will resample to `run.timeframe`.
 # source_timeframe = "1min"
+# Recommended benchmark/reproducibility base window: 2017-01-01..2025-12-31 (UTC).
 
 [paths]
 out_dir = "runs/"

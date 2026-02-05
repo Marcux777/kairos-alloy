@@ -2,8 +2,26 @@ import unittest
 
 
 class TestKairosGymTomlPatch(unittest.TestCase):
+    def _load_impl(self):
+        import importlib.machinery
+        import importlib.util
+        import sys
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[1] / "kairos-gym" / "kairos_gym.py"
+        spec = importlib.util.spec_from_loader(
+            "kairos_gym_impl",
+            importlib.machinery.SourceFileLoader("kairos_gym_impl", str(path)),
+        )
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+
     def test_patch_config_sets_agent_url_and_run_id(self):
-        from tools.kairos_gym import _patch_config_for_gym
+        m = self._load_impl()
+        _patch_config_for_gym = m._patch_config_for_gym
 
         base = """[run]
 run_id = "x"
@@ -34,7 +52,8 @@ feature_version = "v1"
         self.assertIn("html = false", out)
 
     def test_make_single_split_sweep_toml(self):
-        from tools.kairos_gym import _make_single_split_sweep_toml
+        m = self._load_impl()
+        _make_single_split_sweep_toml = m._make_single_split_sweep_toml
         from pathlib import Path
 
         raw = _make_single_split_sweep_toml(
@@ -55,4 +74,3 @@ feature_version = "v1"
 
 if __name__ == "__main__":
     unittest.main()
-

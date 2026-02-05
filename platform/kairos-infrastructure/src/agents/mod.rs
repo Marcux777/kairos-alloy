@@ -75,8 +75,8 @@ impl AgentClient {
         for (name, value) in extra_headers {
             let header_name = HeaderName::from_bytes(name.as_bytes())
                 .map_err(|_| format!("invalid header name: {name}"))?;
-            let header_value =
-                HeaderValue::from_str(&value).map_err(|_| format!("invalid header value for {name}"))?;
+            let header_value = HeaderValue::from_str(&value)
+                .map_err(|_| format!("invalid header value for {name}"))?;
             headers.insert(header_name, header_value);
         }
 

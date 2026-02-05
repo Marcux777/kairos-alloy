@@ -314,7 +314,7 @@ class KairosGymEnv:
             "run",
             "-q",
             "-p",
-            "kairos-tui",
+            "kairos-alloy",
             "--",
             "--headless",
             "--mode",
@@ -380,7 +380,7 @@ class KairosGymEnv:
         return _hold("invalid_action")
 
     def _spawn_rust(self, config_path: Path, sweep_path: Optional[Path]) -> subprocess.Popen:
-        repo_root = Path(__file__).resolve().parent.parent
+        repo_root = Path(__file__).resolve().parents[3]
         cmd = list(self._rust_cmd)
         if self.mode == "sweep" or sweep_path is not None:
             # Ensure we use sweep mode and pass sweep config.
@@ -389,7 +389,7 @@ class KairosGymEnv:
                 "run",
                 "-q",
                 "-p",
-                "kairos-tui",
+                "kairos-alloy",
                 "--",
                 "--headless",
                 "--mode",

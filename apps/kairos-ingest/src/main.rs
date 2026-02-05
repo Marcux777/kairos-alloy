@@ -16,7 +16,11 @@ enum Commands {
     Migrate {
         #[arg(long)]
         db_url: String,
-        #[arg(long, default_value = "migrations")]
+        #[arg(
+            long,
+            env = "KAIROS_MIGRATIONS_DIR",
+            default_value = "platform/ops/migrations"
+        )]
         migrations_path: PathBuf,
     },
     /// Ingest KuCoin OHLCV into PostgreSQL.
