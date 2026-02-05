@@ -5,6 +5,9 @@ This folder hosts one notebook per planned paper (see `research/`).
 The notebooks are **read-only** over run artifacts written by Kairos Alloy under `runs/<run_id>/`
 (`runs/` is gitignored). Notebooks should not require modifying Rust code to run.
 
+Data ingestion for research is handled by `notebooks/00_setup_data.ipynb` (Binance Vision → Postgres),
+so the Rust engine can run backtests and experiments without missing OHLCV.
+
 ## Setup
 
 Inside the dev container:

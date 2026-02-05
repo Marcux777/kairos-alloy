@@ -12,6 +12,7 @@ __pycache__/
 venv/
 .env
 .ipynb_checkpoints/
+notebooks/data/
 
 # OS / IDE
 .DS_Store
