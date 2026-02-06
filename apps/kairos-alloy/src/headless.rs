@@ -77,7 +77,7 @@ fn build_market_data_repo(
     )?))
 }
 
-fn build_sentiment_repo() -> Box<dyn SentimentRepository> {
+fn build_sentiment_repo() -> Box<dyn SentimentRepository + Sync> {
     Box::new(FilesystemSentimentRepository)
 }
 
@@ -259,14 +259,14 @@ fn run_sweep(sweep_config: Option<&Path>) -> Result<serde_json::Value, String> {
     let sentiment_repo = build_sentiment_repo();
     let artifacts = FilesystemArtifactWriter::new();
 
-    let mut agent_factory =
+    let agent_factory =
         |cfg: &kairos_application::config::Config| -> Result<Option<Box<dyn AgentPort>>, String> {
             build_remote_agent(cfg)
         };
 
     let result = kairos_application::experiments::sweep::run_sweep(
         sweep_path.as_path(),
-        &mut agent_factory,
+        &agent_factory,
         market_data.as_ref(),
         sentiment_repo.as_ref(),
         &artifacts,

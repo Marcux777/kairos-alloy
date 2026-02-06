@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -95,15 +97,46 @@ pub struct SweepResult {
     pub runs: Vec<SweepRunEntry>,
 }
 
+#[derive(Debug, Clone)]
+pub struct SweepProgress {
+    pub total_runs: usize,
+    pub completed_runs: usize,
+    pub ok_runs: usize,
+    pub skipped_runs: usize,
+    pub error_runs: usize,
+    pub last_run_id: Option<String>,
+    pub last_error: Option<String>,
+}
+
 pub type AgentFactoryResult = Result<Option<Box<dyn AgentPort>>, String>;
-pub type AgentFactory = dyn FnMut(&Config) -> AgentFactoryResult;
+pub type AgentFactory<'a> = dyn Fn(&Config) -> AgentFactoryResult + Sync + 'a;
 
 pub fn run_sweep(
     sweep_path: &Path,
-    agent_factory: &mut AgentFactory,
+    agent_factory: &AgentFactory<'_>,
     market_data: &dyn MarketDataRepository,
-    sentiment_repo: &dyn SentimentRepository,
-    artifacts: &dyn ArtifactWriter,
+    sentiment_repo: &(dyn SentimentRepository + Sync),
+    artifacts: &(dyn ArtifactWriter + Sync),
+) -> Result<SweepResult, String> {
+    run_sweep_with_hooks(
+        sweep_path,
+        agent_factory,
+        market_data,
+        sentiment_repo,
+        artifacts,
+        None,
+        None,
+    )
+}
+
+pub fn run_sweep_with_hooks(
+    sweep_path: &Path,
+    agent_factory: &AgentFactory<'_>,
+    market_data: &dyn MarketDataRepository,
+    sentiment_repo: &(dyn SentimentRepository + Sync),
+    artifacts: &(dyn ArtifactWriter + Sync),
+    mut on_progress: Option<&mut dyn FnMut(SweepProgress)>,
+    should_cancel: Option<&(dyn Fn() -> bool + Sync)>,
 ) -> Result<SweepResult, String> {
     let raw = std::fs::read_to_string(sweep_path).map_err(|err| {
         format!(
@@ -156,8 +189,24 @@ pub fn run_sweep(
 
     let mut runs: Vec<SweepRunEntry> = Vec::new();
     let grid = expand_grid(&sweep.params);
+    let requested_parallelism = normalize_parallelism(sweep.sweep.parallelism);
+    let total_runs = grid.len().saturating_mul(splits.len());
+    let mut progress = SweepProgress {
+        total_runs,
+        completed_runs: 0,
+        ok_runs: 0,
+        skipped_runs: 0,
+        error_runs: 0,
+        last_run_id: None,
+        last_error: None,
+    };
+    emit_progress(&mut on_progress, &progress);
 
     for split in &splits {
+        if should_cancelled(should_cancel) {
+            return Err("cancelled".to_string());
+        }
+
         let (bars_for_split, report_for_split) =
             filter_bars_for_split(&source_bars, source_step, split)?;
         let in_memory_market = InMemoryMarketDataRepository {
@@ -165,7 +214,10 @@ pub fn run_sweep(
             report: report_for_split,
         };
 
-        for assignment in &grid {
+        let mut split_entries: Vec<Option<SweepRunEntry>> = vec![None; grid.len()];
+        let mut plans: Vec<SweepRunPlan> = Vec::new();
+
+        for (order_idx, assignment) in grid.iter().enumerate() {
             let mut toml_value = base_toml_value.clone();
             apply_assignment(&mut toml_value, assignment)?;
 
@@ -181,64 +233,73 @@ pub fn run_sweep(
             let run_dir = out_dir.join(&run_id);
             let summary_path = run_dir.join("summary.json");
             if resume && summary_path.exists() {
-                runs.push(SweepRunEntry {
+                let entry = SweepRunEntry {
                     run_id,
                     split_id: split.id.clone(),
                     params: assignment.clone(),
                     status: "skipped".to_string(),
                     error: None,
                     metrics: read_metrics_from_summary(&summary_path).ok(),
-                });
+                };
+                update_progress(&mut progress, &entry);
+                emit_progress(&mut on_progress, &progress);
+                split_entries[order_idx] = Some(entry);
                 continue;
             }
 
-            let remote_agent = agent_factory(&config)?;
-            let result = match sweep.sweep.mode {
-                SweepMode::Backtest => crate::backtesting::run_backtest(
-                    &config,
-                    &config_toml,
-                    None,
-                    &in_memory_market,
-                    sentiment_repo,
-                    artifacts,
-                    remote_agent,
-                )
-                .map(|_| ()),
-                SweepMode::Paper => crate::paper_trading::run_paper(
-                    &config,
-                    &config_toml,
-                    None,
-                    &in_memory_market,
-                    sentiment_repo,
-                    artifacts,
-                    remote_agent,
-                )
-                .map(|_| ()),
-            };
+            plans.push(SweepRunPlan {
+                order_idx,
+                run_id,
+                split_id: split.id.clone(),
+                params: assignment.clone(),
+                config,
+                config_toml,
+                summary_path,
+            });
+        }
 
-            match result {
-                Ok(()) => {
-                    let metrics = read_metrics_from_summary(&summary_path).ok();
-                    runs.push(SweepRunEntry {
-                        run_id,
-                        split_id: split.id.clone(),
-                        params: assignment.clone(),
-                        status: "ok".to_string(),
-                        error: None,
-                        metrics,
-                    });
-                }
-                Err(err) => {
-                    runs.push(SweepRunEntry {
-                        run_id,
-                        split_id: split.id.clone(),
-                        params: assignment.clone(),
-                        status: "error".to_string(),
-                        error: Some(err),
-                        metrics: None,
-                    });
-                }
-            }
+        let mut on_entry = |entry: &SweepRunEntry| {
+            update_progress(&mut progress, entry);
+            emit_progress(&mut on_progress, &progress);
+        };
+
+        let mut executed = if requested_parallelism <= 1 || plans.len() <= 1 {
+            execute_plans_serial(
+                &plans,
+                sweep.sweep.mode,
+                &in_memory_market,
+                sentiment_repo,
+                artifacts,
+                agent_factory,
+                should_cancel,
+                &mut on_entry,
+            )?
+        } else {
+            execute_plans_parallel(
+                &plans,
+                requested_parallelism,
+                sweep.sweep.mode,
+                &in_memory_market,
+                sentiment_repo,
+                artifacts,
+                agent_factory,
+                should_cancel,
+                &mut on_entry,
+            )?
+        };
+
+        executed.sort_by_key(|(order_idx, _)| *order_idx);
+        for (order_idx, entry) in executed {
+            split_entries[order_idx] = Some(entry);
+        }
+
+        for entry in split_entries {
+            runs.push(entry.ok_or_else(|| {
+                format!(
+                    "internal sweep error: missing run entry for split '{}' (sweep '{}')",
+                    split.id, sweep.sweep.id
+                )
+            })?);
         }
     }
 
@@ -255,6 +316,233 @@ pub fn run_sweep(
     write_leaderboard_csv(&sweep_dir, &result, sweep.leaderboard.as_ref())?;
 
     Ok(result)
+}
+
+#[derive(Debug, Clone)]
+struct SweepRunPlan {
+    order_idx: usize,
+    run_id: String,
+    split_id: String,
+    params: BTreeMap<String, toml::Value>,
+    config: Config,
+    config_toml: String,
+    summary_path: PathBuf,
+}
+
+enum WorkerMessage {
+    Entry {
+        order_idx: usize,
+        entry: SweepRunEntry,
+    },
+    Fatal(String),
+}
+
+fn normalize_parallelism(value: Option<usize>) -> usize {
+    value.unwrap_or(1).max(1)
+}
+
+fn execute_plans_serial(
+    plans: &[SweepRunPlan],
+    mode: SweepMode,
+    market_data: &(dyn MarketDataRepository + Sync),
+    sentiment_repo: &(dyn SentimentRepository + Sync),
+    artifacts: &(dyn ArtifactWriter + Sync),
+    agent_factory: &AgentFactory<'_>,
+    should_cancel: Option<&(dyn Fn() -> bool + Sync)>,
+    on_entry: &mut dyn FnMut(&SweepRunEntry),
+) -> Result<Vec<(usize, SweepRunEntry)>, String> {
+    let mut out = Vec::with_capacity(plans.len());
+    for plan in plans {
+        if should_cancelled(should_cancel) {
+            return Err("cancelled".to_string());
+        }
+        let entry = execute_run_plan(
+            plan,
+            mode,
+            market_data,
+            sentiment_repo,
+            artifacts,
+            agent_factory,
+        )?;
+        on_entry(&entry);
+        out.push((plan.order_idx, entry));
+    }
+    Ok(out)
+}
+
+fn execute_plans_parallel(
+    plans: &[SweepRunPlan],
+    parallelism: usize,
+    mode: SweepMode,
+    market_data: &(dyn MarketDataRepository + Sync),
+    sentiment_repo: &(dyn SentimentRepository + Sync),
+    artifacts: &(dyn ArtifactWriter + Sync),
+    agent_factory: &AgentFactory<'_>,
+    should_cancel: Option<&(dyn Fn() -> bool + Sync)>,
+    on_entry: &mut dyn FnMut(&SweepRunEntry),
+) -> Result<Vec<(usize, SweepRunEntry)>, String> {
+    let worker_count = parallelism.max(1).min(plans.len());
+    let next_index = AtomicUsize::new(0);
+    let cancelled = AtomicBool::new(false);
+    let (tx, rx) = mpsc::channel::<WorkerMessage>();
+
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count {
+            let tx = tx.clone();
+            let next_index_ref = &next_index;
+            let cancelled_ref = &cancelled;
+            scope.spawn(move || loop {
+                if cancelled_ref.load(Ordering::Relaxed) || should_cancelled(should_cancel) {
+                    cancelled_ref.store(true, Ordering::Relaxed);
+                    let _ = tx.send(WorkerMessage::Fatal("cancelled".to_string()));
+                    break;
+                }
+
+                let plan_idx = next_index_ref.fetch_add(1, Ordering::Relaxed);
+                if plan_idx >= plans.len() {
+                    break;
+                }
+
+                match execute_run_plan(
+                    &plans[plan_idx],
+                    mode,
+                    market_data,
+                    sentiment_repo,
+                    artifacts,
+                    agent_factory,
+                ) {
+                    Ok(entry) => {
+                        if tx
+                            .send(WorkerMessage::Entry {
+                                order_idx: plans[plan_idx].order_idx,
+                                entry,
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        cancelled_ref.store(true, Ordering::Relaxed);
+                        let _ = tx.send(WorkerMessage::Fatal(err));
+                        break;
+                    }
+                }
+            });
+        }
+
+        drop(tx);
+
+        let mut entries: Vec<(usize, SweepRunEntry)> = Vec::with_capacity(plans.len());
+        let mut fatal_error: Option<String> = None;
+        while let Ok(message) = rx.recv() {
+            match message {
+                WorkerMessage::Entry { order_idx, entry } => {
+                    if fatal_error.is_none() {
+                        on_entry(&entry);
+                        entries.push((order_idx, entry));
+                    }
+                }
+                WorkerMessage::Fatal(err) => {
+                    if fatal_error.is_none() {
+                        fatal_error = Some(err);
+                    }
+                }
+            }
+        }
+
+        if let Some(err) = fatal_error {
+            return Err(err);
+        }
+        if entries.len() != plans.len() {
+            return Err(format!(
+                "internal sweep error: expected {} results, got {}",
+                plans.len(),
+                entries.len()
+            ));
+        }
+
+        Ok(entries)
+    })
+}
+
+fn execute_run_plan(
+    plan: &SweepRunPlan,
+    mode: SweepMode,
+    market_data: &(dyn MarketDataRepository + Sync),
+    sentiment_repo: &(dyn SentimentRepository + Sync),
+    artifacts: &(dyn ArtifactWriter + Sync),
+    agent_factory: &AgentFactory<'_>,
+) -> Result<SweepRunEntry, String> {
+    let remote_agent = agent_factory(&plan.config)?;
+    let result = match mode {
+        SweepMode::Backtest => crate::backtesting::run_backtest(
+            &plan.config,
+            &plan.config_toml,
+            None,
+            market_data,
+            sentiment_repo,
+            artifacts,
+            remote_agent,
+        )
+        .map(|_| ()),
+        SweepMode::Paper => crate::paper_trading::run_paper(
+            &plan.config,
+            &plan.config_toml,
+            None,
+            market_data,
+            sentiment_repo,
+            artifacts,
+            remote_agent,
+        )
+        .map(|_| ()),
+    };
+
+    let entry = match result {
+        Ok(()) => SweepRunEntry {
+            run_id: plan.run_id.clone(),
+            split_id: plan.split_id.clone(),
+            params: plan.params.clone(),
+            status: "ok".to_string(),
+            error: None,
+            metrics: read_metrics_from_summary(&plan.summary_path).ok(),
+        },
+        Err(err) => SweepRunEntry {
+            run_id: plan.run_id.clone(),
+            split_id: plan.split_id.clone(),
+            params: plan.params.clone(),
+            status: "error".to_string(),
+            error: Some(err),
+            metrics: None,
+        },
+    };
+
+    Ok(entry)
+}
+
+fn should_cancelled(should_cancel: Option<&(dyn Fn() -> bool + Sync)>) -> bool {
+    should_cancel.map(|f| f()).unwrap_or(false)
+}
+
+fn update_progress(progress: &mut SweepProgress, entry: &SweepRunEntry) {
+    progress.completed_runs = progress.completed_runs.saturating_add(1);
+    progress.last_run_id = Some(entry.run_id.clone());
+    progress.last_error = entry.error.clone();
+    match entry.status.as_str() {
+        "ok" => progress.ok_runs = progress.ok_runs.saturating_add(1),
+        "skipped" => progress.skipped_runs = progress.skipped_runs.saturating_add(1),
+        "error" => progress.error_runs = progress.error_runs.saturating_add(1),
+        _ => {}
+    }
+}
+
+fn emit_progress(
+    on_progress: &mut Option<&mut dyn FnMut(SweepProgress)>,
+    progress: &SweepProgress,
+) {
+    if let Some(callback) = on_progress.as_mut() {
+        (callback)(progress.clone());
+    }
 }
 
 fn resolve_base_config_path(sweep_path: &Path, base: &str) -> PathBuf {
@@ -594,6 +882,11 @@ impl MarketDataRepository for InMemoryMarketDataRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kairos_domain::repositories::sentiment::SentimentQuery;
+    use kairos_domain::services::sentiment::{SentimentPoint, SentimentReport};
+    use kairos_infrastructure::artifacts::FilesystemArtifactWriter;
+    use std::sync::atomic::AtomicUsize;
+    use std::time::Duration;
 
     #[test]
     fn expand_grid_is_deterministic() {
@@ -632,5 +925,183 @@ mod tests {
         let mut v: toml::Value = toml::from_str("[a]\nb=1\n").unwrap();
         let err = set_path_value(&mut v, "a.c", toml::Value::Integer(2)).unwrap_err();
         assert!(err.contains("path not found"));
+    }
+
+    #[test]
+    fn normalize_parallelism_guards_invalid_values() {
+        assert_eq!(normalize_parallelism(None), 1);
+        assert_eq!(normalize_parallelism(Some(0)), 1);
+        assert_eq!(normalize_parallelism(Some(4)), 4);
+    }
+
+    struct EmptySentimentRepo;
+
+    impl SentimentRepository for EmptySentimentRepo {
+        fn load_sentiment(
+            &self,
+            _query: &SentimentQuery,
+        ) -> Result<(Vec<SentimentPoint>, SentimentReport), String> {
+            Ok((Vec::new(), SentimentReport::default()))
+        }
+    }
+
+    fn test_temp_dir(prefix: &str) -> PathBuf {
+        let unique = format!(
+            "{}_{}_{}",
+            prefix,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock before UNIX_EPOCH")
+                .as_nanos()
+        );
+        std::env::temp_dir().join(unique)
+    }
+
+    fn sample_bars(symbol: &str, count: usize) -> Vec<Bar> {
+        (0..count)
+            .map(|index| {
+                let ts = 60_i64 * (index as i64 + 1);
+                let close = 100.0 + index as f64;
+                Bar {
+                    symbol: symbol.to_string(),
+                    timestamp: ts,
+                    open: close,
+                    high: close + 1.0,
+                    low: close - 1.0,
+                    close,
+                    volume: 1.0,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn run_sweep_parallelism_executes_concurrently_and_keeps_order() {
+        let temp_dir = test_temp_dir("kairos_sweep_parallel");
+        std::fs::create_dir_all(&temp_dir).expect("temp dir");
+
+        let out_dir = temp_dir.join("runs_out");
+        let base_config = format!(
+            r#"
+[run]
+run_id = "base_run"
+symbol = "BTCUSDT"
+timeframe = "1min"
+initial_capital = 1000.0
+
+[db]
+ohlcv_table = "ohlcv_candles"
+exchange = "kucoin"
+market = "spot"
+
+[paths]
+out_dir = "{}"
+
+[costs]
+fee_bps = 0.0
+slippage_bps = 0.0
+
+[risk]
+max_position_qty = 1.0
+max_drawdown_pct = 1.0
+max_exposure_pct = 1.0
+
+[features]
+return_mode = "pct"
+sma_windows = [2]
+rsi_enabled = false
+sentiment_lag = "0s"
+
+[agent]
+mode = "baseline"
+url = "http://127.0.0.1:8000"
+timeout_ms = 100
+retries = 0
+fallback_action = "HOLD"
+api_version = "v1"
+feature_version = "v1"
+"#,
+            out_dir.display()
+        );
+        let base_path = temp_dir.join("base.toml");
+        std::fs::write(&base_path, base_config).expect("write base config");
+
+        let sweep_path = temp_dir.join("sweep.toml");
+        std::fs::write(
+            &sweep_path,
+            r#"
+[base]
+config = "base.toml"
+
+[sweep]
+id = "parallel_demo"
+mode = "backtest"
+parallelism = 4
+resume = false
+
+[[params]]
+path = "costs.slippage_bps"
+values = [0.0, 1.0, 2.0]
+"#,
+        )
+        .expect("write sweep config");
+
+        let bars = sample_bars("BTCUSDT", 128);
+        let source_market = InMemoryMarketDataRepository {
+            bars: bars.clone(),
+            report: data_quality_from_bars(&bars, Some(60)),
+        };
+        let sentiment = EmptySentimentRepo;
+        let artifacts = FilesystemArtifactWriter::new();
+
+        let active_calls = AtomicUsize::new(0);
+        let max_active_calls = AtomicUsize::new(0);
+        let agent_factory = |_: &Config| -> AgentFactoryResult {
+            let current = active_calls.fetch_add(1, Ordering::Relaxed) + 1;
+            max_active_calls.fetch_max(current, Ordering::Relaxed);
+            std::thread::sleep(Duration::from_millis(35));
+            active_calls.fetch_sub(1, Ordering::Relaxed);
+            Ok(None)
+        };
+
+        let result = run_sweep(
+            &sweep_path,
+            &agent_factory,
+            &source_market,
+            &sentiment,
+            &artifacts,
+        )
+        .expect("run sweep");
+
+        assert_eq!(result.runs.len(), 3);
+        assert!(result.runs.iter().all(|run| run.status == "ok"));
+        assert!(
+            max_active_calls.load(Ordering::Relaxed) > 1,
+            "parallel sweep should call agent_factory concurrently"
+        );
+
+        let expected_assignments = expand_grid(&[SweepParam {
+            path: "costs.slippage_bps".to_string(),
+            values: vec![
+                toml::Value::Float(0.0),
+                toml::Value::Float(1.0),
+                toml::Value::Float(2.0),
+            ],
+        }]);
+        let expected_run_ids: Vec<String> = expected_assignments
+            .iter()
+            .map(|assignment| {
+                format!(
+                    "parallel_demo__{}__full",
+                    assignment_hash("full", assignment)
+                )
+            })
+            .collect();
+        let actual_run_ids: Vec<String> =
+            result.runs.iter().map(|run| run.run_id.clone()).collect();
+        assert_eq!(actual_run_ids, expected_run_ids);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

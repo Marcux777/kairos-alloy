@@ -1,4 +1,6 @@
-use crate::app::{App, BacktestTab, QuickEditField, ReportsMode, SetupFocus, ViewId};
+use crate::app::{
+    App, BacktestTab, ExperimentsFocus, QuickEditField, ReportsMode, SetupFocus, ViewId,
+};
 use kairos_domain::value_objects::side::Side;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -58,7 +60,14 @@ fn draw_top_banner(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_sidebar(frame: &mut Frame, area: Rect, app: &App) {
-    let items = ["Setup", "Backtest", "Monitor", "Reports", "Quit"];
+    let items = [
+        "Setup",
+        "Backtest",
+        "Monitor",
+        "Reports",
+        "Experiments",
+        "Quit",
+    ];
     let list_items: Vec<ListItem> = items
         .iter()
         .enumerate()
@@ -83,6 +92,7 @@ fn draw_main(frame: &mut Frame, area: Rect, app: &mut App) {
         ViewId::Backtest => draw_backtest(frame, area, app),
         ViewId::Monitor => draw_monitor(frame, area, app),
         ViewId::Reports => draw_reports(frame, area, app),
+        ViewId::Experiments => draw_experiments(frame, area, app),
     }
 }
 
@@ -438,6 +448,132 @@ fn draw_backtest(frame: &mut Frame, area: Rect, app: &mut App) {
     );
 }
 
+fn draw_experiments(frame: &mut Frame, area: Rect, app: &mut App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(10), Constraint::Min(4)].as_ref())
+        .split(area);
+
+    let mut lines: Vec<Line> = Vec::new();
+    if app.status.running && app.status.kind == Some(crate::tasks::TaskKind::Sweep) {
+        lines.push(Line::from(Span::styled(
+            format!("sweep running {}", app.spinner_char()),
+            Style::default().fg(Color::Yellow),
+        )));
+    } else {
+        lines.push(Line::from("sweep idle"));
+    }
+    lines.push(Line::from(""));
+
+    let sweep_marker = if app.experiments_focus == ExperimentsFocus::SweepPath {
+        ">"
+    } else {
+        " "
+    };
+    let parallel_marker = if app.experiments_focus == ExperimentsFocus::Parallelism {
+        ">"
+    } else {
+        " "
+    };
+
+    let parallel_display = if app.experiments_parallelism.value.trim().is_empty() {
+        "<from sweep file>".to_string()
+    } else {
+        app.experiments_parallelism.value.clone()
+    };
+
+    lines.push(Line::from(format!(
+        "{sweep_marker} sweep_config: {}",
+        app.experiments_sweep_path.value
+    )));
+    lines.push(Line::from(format!(
+        "{parallel_marker} parallelism override: {parallel_display}"
+    )));
+    lines.push(Line::from(format!(
+        "  resume existing runs: {} (toggle: v)",
+        if app.experiments_resume { "on" } else { "off" }
+    )));
+
+    if let Some(progress) = &app.experiments_progress {
+        lines.push(Line::from(""));
+        lines.push(Line::from(format!(
+            "progress: {}/{} | ok={} skipped={} error={}",
+            progress.completed_runs,
+            progress.total_runs,
+            progress.ok_runs,
+            progress.skipped_runs,
+            progress.error_runs
+        )));
+        if let Some(run_id) = &progress.last_run_id {
+            lines.push(Line::from(format!("last run: {run_id}")));
+        }
+        if let Some(err) = &progress.last_error {
+            lines.push(Line::from(Span::styled(
+                format!("last error: {err}"),
+                Style::default().fg(Color::Red),
+            )));
+        }
+    }
+
+    if let Some(err) = &app.last_error {
+        lines.push(Line::from(Span::styled(
+            format!("error: {err}"),
+            Style::default().fg(Color::Red),
+        )));
+    }
+    if let Some(info) = &app.info_message {
+        lines.push(Line::from(Span::styled(
+            format!("info: {info}"),
+            Style::default().fg(Color::Green),
+        )));
+    }
+
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .title("Experiments (Sweep)")
+                    .borders(Borders::ALL),
+            )
+            .wrap(Wrap { trim: false }),
+        chunks[0],
+    );
+
+    let mut footer: Vec<Line> = Vec::new();
+    footer.push(Line::from(
+        "keys: Tab/↑/↓ focus | type to edit | Backspace/Delete/←/→ cursor",
+    ));
+    footer.push(Line::from(
+        "keys: r or Enter run | v toggle resume | x cancel | Esc menu",
+    ));
+    if let Some(last) = &app.status.last_result {
+        footer.push(Line::from(""));
+        match last {
+            Ok(msg) => {
+                footer.push(Line::from(Span::styled(
+                    "last result: OK",
+                    Style::default().fg(Color::Green),
+                )));
+                footer.extend(msg.lines().take(8).map(Line::from));
+            }
+            Err(err) => {
+                footer.push(Line::from(Span::styled(
+                    "last result: ERR",
+                    Style::default().fg(Color::Red),
+                )));
+                footer.extend(err.lines().take(8).map(Line::from));
+            }
+        }
+    }
+
+    frame.render_widget(
+        Paragraph::new(footer)
+            .block(Block::default().title("Run").borders(Borders::ALL))
+            .wrap(Wrap { trim: false }),
+        chunks[1],
+    );
+}
+
 fn draw_monitor(frame: &mut Frame, area: Rect, app: &mut App) {
     if app.price_series.is_empty() || app.equity_series.is_empty() {
         let lines = vec![
@@ -768,6 +904,7 @@ fn task_kind_label(kind: crate::tasks::TaskKind) -> &'static str {
         crate::tasks::TaskKind::Backtest => "backtest",
         crate::tasks::TaskKind::Paper => "paper",
         crate::tasks::TaskKind::PaperRealtime => "paper(realtime)",
+        crate::tasks::TaskKind::Sweep => "sweep",
     }
 }
 

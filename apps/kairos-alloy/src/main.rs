@@ -173,6 +173,14 @@ fn main() {
             .filter(|v| !v.trim().is_empty())
             .map(PathBuf::from)
     });
+    let initial_config_path =
+        match kairos_alloy::bootstrap::prepare_tui_startup(initial_config_path) {
+            Ok(path) => Some(path),
+            Err(err) => {
+                eprintln!("error: {err}");
+                std::process::exit(1);
+            }
+        };
 
     let opts = TuiOpts {
         initial_config_path,

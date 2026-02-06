@@ -1,6 +1,7 @@
 use crate::logging::LogStore;
 use crate::tasks::{
-    AgentLlmRuntime, StreamStatusSample, TaskEvent, TaskKind, TaskRunner, TradeSample,
+    AgentLlmRuntime, StreamStatusSample, SweepProgressSample, TaskEvent, TaskKind, TaskRunner,
+    TradeSample,
 };
 use crossterm::event::{Event as CtEvent, KeyCode, KeyEvent, KeyModifiers};
 use std::collections::VecDeque;
@@ -14,6 +15,7 @@ const MAX_SERIES_POINTS: usize = 600;
 const MAX_TRADES: usize = 200;
 const DEFAULT_CONFIG_DIR: &str = "platform/ops/configs";
 const DEFAULT_AGENT_LLM_SCRIPT: &str = "apps/agents/agent-llm/agent_llm.py";
+const DEFAULT_SWEEP_CONFIG: &str = "platform/ops/configs/sweeps/sma_grid.toml";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewId {
@@ -22,6 +24,7 @@ pub enum ViewId {
     Backtest,
     Monitor,
     Reports,
+    Experiments,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +52,12 @@ pub enum SetupFocus {
     Input,
     QuickEdit,
     List,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExperimentsFocus {
+    SweepPath,
+    Parallelism,
 }
 
 pub struct TextInput {
@@ -244,6 +253,12 @@ pub struct App {
     pub reports_analyzer_text: Option<String>,
     pub reports_scroll: usize,
 
+    pub experiments_focus: ExperimentsFocus,
+    pub experiments_sweep_path: TextInput,
+    pub experiments_parallelism: TextInput,
+    pub experiments_resume: bool,
+    pub experiments_progress: Option<SweepProgressSample>,
+
     pub dirty: bool,
     spinner: usize,
     pub last_error: Option<String>,
@@ -307,6 +322,11 @@ impl App {
             reports_selected_analyzer: 0,
             reports_analyzer_text: None,
             reports_scroll: 0,
+            experiments_focus: ExperimentsFocus::SweepPath,
+            experiments_sweep_path: TextInput::new(DEFAULT_SWEEP_CONFIG.to_string()),
+            experiments_parallelism: TextInput::new(String::new()),
+            experiments_resume: false,
+            experiments_progress: None,
             dirty: true,
             spinner: 0,
             last_error: None,
@@ -366,6 +386,11 @@ impl App {
                 self.dirty = true;
                 Ok(false)
             }
+            TaskEvent::SweepProgress(progress) => {
+                self.experiments_progress = Some(progress);
+                self.dirty = true;
+                Ok(false)
+            }
             TaskEvent::StreamStatus(status) => {
                 self.stream_status = Some(status);
                 self.dirty = true;
@@ -420,6 +445,7 @@ impl App {
             ViewId::Backtest => self.handle_backtest_keys(key),
             ViewId::Monitor => self.handle_backtest_keys(key), // Share controls with Backtest
             ViewId::Reports => self.handle_reports_keys(key),
+            ViewId::Experiments => self.handle_experiments_keys(key),
         }
     }
 
@@ -431,7 +457,7 @@ impl App {
                 self.dirty = true;
             }
             KeyCode::Down => {
-                self.menu_index = (self.menu_index + 1).min(3);
+                self.menu_index = (self.menu_index + 1).min(5);
                 self.dirty = true;
             }
             KeyCode::Enter => {
@@ -453,7 +479,9 @@ impl App {
                         self.reports_mode = ReportsMode::Runs;
                         ViewId::Reports
                     }
-                    _ => ViewId::Setup,
+                    4 => ViewId::Experiments,
+                    5 => return Ok(true),
+                    _ => ViewId::MainMenu,
                 };
                 self.dirty = true;
             }
@@ -905,6 +933,89 @@ impl App {
         Ok(false)
     }
 
+    fn handle_experiments_keys(&mut self, key: KeyEvent) -> Result<bool, String> {
+        match key.code {
+            KeyCode::Esc => {
+                self.active_view = ViewId::MainMenu;
+                self.dirty = true;
+            }
+            KeyCode::Tab => {
+                self.experiments_focus = match self.experiments_focus {
+                    ExperimentsFocus::SweepPath => ExperimentsFocus::Parallelism,
+                    ExperimentsFocus::Parallelism => ExperimentsFocus::SweepPath,
+                };
+                self.dirty = true;
+            }
+            KeyCode::Char('r') | KeyCode::Enter => {
+                self.start_experiments_sweep();
+                self.dirty = true;
+            }
+            KeyCode::Char('v') => {
+                if !self.status.running {
+                    self.experiments_resume = !self.experiments_resume;
+                    self.dirty = true;
+                }
+            }
+            KeyCode::Char('x') => {
+                if self.status.running && self.status.kind == Some(TaskKind::Sweep) {
+                    self.task_runner.cancel_current();
+                    self.cancel_requested = true;
+                    self.paused = false;
+                    self.status.last_result = Some(Err("Cancelled".to_string()));
+                    self.dirty = true;
+                }
+            }
+            KeyCode::Up | KeyCode::Down => {
+                self.experiments_focus = match self.experiments_focus {
+                    ExperimentsFocus::SweepPath => ExperimentsFocus::Parallelism,
+                    ExperimentsFocus::Parallelism => ExperimentsFocus::SweepPath,
+                };
+                self.dirty = true;
+            }
+            KeyCode::Backspace => {
+                match self.experiments_focus {
+                    ExperimentsFocus::SweepPath => self.experiments_sweep_path.backspace(),
+                    ExperimentsFocus::Parallelism => self.experiments_parallelism.backspace(),
+                }
+                self.dirty = true;
+            }
+            KeyCode::Delete => {
+                match self.experiments_focus {
+                    ExperimentsFocus::SweepPath => self.experiments_sweep_path.delete(),
+                    ExperimentsFocus::Parallelism => self.experiments_parallelism.delete(),
+                }
+                self.dirty = true;
+            }
+            KeyCode::Left => {
+                match self.experiments_focus {
+                    ExperimentsFocus::SweepPath => self.experiments_sweep_path.move_left(),
+                    ExperimentsFocus::Parallelism => self.experiments_parallelism.move_left(),
+                }
+                self.dirty = true;
+            }
+            KeyCode::Right => {
+                match self.experiments_focus {
+                    ExperimentsFocus::SweepPath => self.experiments_sweep_path.move_right(),
+                    ExperimentsFocus::Parallelism => self.experiments_parallelism.move_right(),
+                }
+                self.dirty = true;
+            }
+            KeyCode::Char(ch) => {
+                if !key.modifiers.contains(KeyModifiers::CONTROL) {
+                    match self.experiments_focus {
+                        ExperimentsFocus::SweepPath => self.experiments_sweep_path.insert_char(ch),
+                        ExperimentsFocus::Parallelism => {
+                            self.experiments_parallelism.insert_char(ch)
+                        }
+                    }
+                    self.dirty = true;
+                }
+            }
+            _ => {}
+        }
+        Ok(false)
+    }
+
     pub fn try_load_config(&mut self) {
         let raw = self.config_input.value.trim().to_string();
         if raw.is_empty() {
@@ -1114,6 +1225,61 @@ impl App {
         recents.insert(0, abs);
         recents.truncate(10);
         let _ = store_recent_configs(&recents);
+    }
+
+    fn start_experiments_sweep(&mut self) {
+        if self.status.running {
+            return;
+        }
+
+        let sweep_raw = self.experiments_sweep_path.value.trim();
+        if sweep_raw.is_empty() {
+            self.set_error_and_clear_info("sweep config path cannot be empty");
+            return;
+        }
+
+        let sweep_path = PathBuf::from(sweep_raw);
+        if !sweep_path.exists() {
+            self.set_error_and_clear_info("sweep config not found");
+            return;
+        }
+
+        let parallelism = {
+            let raw = self.experiments_parallelism.value.trim();
+            if raw.is_empty() {
+                None
+            } else {
+                let parsed = match raw.parse::<usize>() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        self.set_error_and_clear_info("parallelism must be a positive integer");
+                        return;
+                    }
+                };
+                if parsed == 0 {
+                    self.set_error_and_clear_info("parallelism must be >= 1");
+                    return;
+                }
+                Some(parsed)
+            }
+        };
+
+        self.status.running = true;
+        self.paused = false;
+        self.cancel_requested = false;
+        self.pause_blink = true;
+        self.tick_counter = 0;
+        self.status.kind = Some(TaskKind::Sweep);
+        self.status.started_at = Some(Instant::now());
+        self.status.last_result = None;
+        self.stream_status = None;
+        self.experiments_progress = None;
+        self.last_error = None;
+        self.info_message = Some("sweep started".to_string());
+        self.info_expires_at = Some(Instant::now() + std::time::Duration::from_secs(2));
+
+        self.task_runner
+            .start_sweep(sweep_path, parallelism, self.experiments_resume);
     }
 
     fn start_selected_task(&mut self) -> Result<(), String> {

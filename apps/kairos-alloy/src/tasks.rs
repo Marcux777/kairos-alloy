@@ -7,8 +7,10 @@ use kairos_infrastructure::persistence::postgres_ohlcv::PostgresMarketDataReposi
 use kairos_infrastructure::sentiment::FilesystemSentimentRepository;
 use parking_lot::{Condvar, Mutex};
 use std::env;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const STREAM_EVERY_N_BARS: u64 = 10;
 
@@ -18,6 +20,7 @@ pub enum TaskKind {
     Backtest,
     Paper,
     PaperRealtime,
+    Sweep,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -44,9 +47,21 @@ pub struct BarProgressSample {
     pub trades_in_bar: Vec<TradeSample>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SweepProgressSample {
+    pub total_runs: usize,
+    pub completed_runs: usize,
+    pub ok_runs: usize,
+    pub skipped_runs: usize,
+    pub error_runs: usize,
+    pub last_run_id: Option<String>,
+    pub last_error: Option<String>,
+}
+
 pub enum TaskEvent {
     Input(crossterm::event::Event),
     Progress(BarProgressSample),
+    SweepProgress(SweepProgressSample),
     StreamStatus(StreamStatusSample),
     TaskFinished(Result<String, String>),
 }
@@ -129,6 +144,10 @@ impl TaskControl {
         let (lock, _) = &*self.pause;
         lock.lock().paused
     }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
 }
 
 impl kairos_domain::services::engine::backtest::RunControl for TaskControl {
@@ -173,9 +192,10 @@ impl TaskRunner {
         let tx = inner.tx.clone();
         tokio::task::spawn_blocking(move || {
             let control = match kind {
-                TaskKind::Backtest | TaskKind::Paper | TaskKind::PaperRealtime => {
-                    Some(TaskControl::new())
-                }
+                TaskKind::Backtest
+                | TaskKind::Paper
+                | TaskKind::PaperRealtime
+                | TaskKind::Sweep => Some(TaskControl::new()),
                 _ => None,
             };
             {
@@ -190,6 +210,36 @@ impl TaskRunner {
                 &tx,
                 control.as_ref(),
                 agent_llm.as_ref(),
+            );
+            {
+                let mut slot = inner.control.lock();
+                *slot = None;
+            }
+            let _ = tx.send(TaskEvent::TaskFinished(result));
+        });
+    }
+
+    pub fn start_sweep(
+        &self,
+        sweep_config: PathBuf,
+        parallelism_override: Option<usize>,
+        resume: bool,
+    ) {
+        let inner = self.inner.clone();
+        let tx = inner.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let control = Some(TaskControl::new());
+            {
+                let mut slot = inner.control.lock();
+                *slot = control.clone();
+            }
+
+            let result = run_sweep_task(
+                sweep_config.as_path(),
+                parallelism_override,
+                resume,
+                &tx,
+                control.as_ref(),
             );
             {
                 let mut slot = inner.control.lock();
@@ -230,7 +280,120 @@ fn run_task(
         TaskKind::Backtest => run_backtest(config, config_toml, tx, control, agent_llm),
         TaskKind::Paper => run_paper(config, config_toml, tx, control, agent_llm),
         TaskKind::PaperRealtime => run_paper_realtime(config, config_toml, tx, control, agent_llm),
+        TaskKind::Sweep => Err("internal error: use start_sweep for TaskKind::Sweep".to_string()),
     }
+}
+
+fn run_sweep_task(
+    sweep_config: &Path,
+    parallelism_override: Option<usize>,
+    resume: bool,
+    tx: &tokio::sync::mpsc::UnboundedSender<TaskEvent>,
+    control: Option<&TaskControl>,
+) -> Result<String, String> {
+    if !sweep_config.exists() {
+        return Err(format!(
+            "sweep config not found: {}",
+            sweep_config.display()
+        ));
+    }
+
+    let raw = std::fs::read_to_string(sweep_config).map_err(|err| {
+        format!(
+            "failed to read sweep config {}: {err}",
+            sweep_config.display()
+        )
+    })?;
+    let mut sweep_file: kairos_application::experiments::sweep::SweepFile = toml::from_str(&raw)
+        .map_err(|err| {
+            format!(
+                "failed to parse sweep TOML {}: {err}",
+                sweep_config.display()
+            )
+        })?;
+
+    if let Some(parallelism) = parallelism_override {
+        sweep_file.sweep.parallelism = Some(parallelism.max(1));
+    }
+    sweep_file.sweep.resume = Some(resume);
+
+    let resolved_base = resolve_base_config_path(sweep_config, sweep_file.base.config.as_str());
+    let (base_config, _) = kairos_application::config::load_config_with_source(&resolved_base)?;
+    sweep_file.base.config = resolved_base.display().to_string();
+
+    let runtime_sweep_path = write_runtime_sweep_file(&sweep_file)?;
+    let market_data = build_market_data_repo(&base_config)?;
+    let sentiment_repo =
+        Box::new(FilesystemSentimentRepository) as Box<dyn SentimentRepository + Sync>;
+    let artifacts = FilesystemArtifactWriter::new();
+    let agent_factory =
+        |cfg: &kairos_application::config::Config| -> Result<Option<Box<dyn AgentPort>>, String> {
+            build_remote_agent(cfg, None)
+        };
+
+    let mut on_progress = |progress: kairos_application::experiments::sweep::SweepProgress| {
+        let _ = tx.send(TaskEvent::SweepProgress(SweepProgressSample {
+            total_runs: progress.total_runs,
+            completed_runs: progress.completed_runs,
+            ok_runs: progress.ok_runs,
+            skipped_runs: progress.skipped_runs,
+            error_runs: progress.error_runs,
+            last_run_id: progress.last_run_id,
+            last_error: progress.last_error,
+        }));
+    };
+    let should_cancel = || control.map(|c| c.is_cancelled()).unwrap_or(false);
+
+    let result = kairos_application::experiments::sweep::run_sweep_with_hooks(
+        runtime_sweep_path.as_path(),
+        &agent_factory,
+        market_data.as_ref(),
+        sentiment_repo.as_ref(),
+        &artifacts,
+        Some(&mut on_progress),
+        Some(&should_cancel),
+    );
+
+    let _ = std::fs::remove_file(&runtime_sweep_path);
+
+    let result = result?;
+    Ok(format!(
+        "sweep complete: {} (runs={})",
+        result.sweep_dir.display(),
+        result.runs.len()
+    ))
+}
+
+fn resolve_base_config_path(sweep_path: &Path, base: &str) -> PathBuf {
+    let p = PathBuf::from(base);
+    if p.is_absolute() {
+        p
+    } else {
+        sweep_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(p)
+    }
+}
+
+fn write_runtime_sweep_file(
+    sweep_file: &kairos_application::experiments::sweep::SweepFile,
+) -> Result<PathBuf, String> {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    let path = std::env::temp_dir().join(format!("kairos_sweep_runtime_{pid}_{unique}.toml"));
+    let toml = toml::to_string_pretty(sweep_file)
+        .map_err(|err| format!("failed to serialize runtime sweep config: {err}"))?;
+    std::fs::write(&path, toml).map_err(|err| {
+        format!(
+            "failed to write runtime sweep config {}: {err}",
+            path.display()
+        )
+    })?;
+    Ok(path)
 }
 
 fn resolve_db_url(config: &kairos_application::config::Config) -> Result<String, String> {
