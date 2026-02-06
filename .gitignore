@@ -3,6 +3,8 @@
 **/*.rs.bk
 **/runs/
 runs/
+*.profraw
+*.profdata
 
 # Python
 __pycache__/
@@ -13,6 +15,12 @@ venv/
 .env
 .ipynb_checkpoints/
 notebooks/data/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # OS / IDE
 .DS_Store
@@ -23,22 +31,31 @@ notebooks/data/
 *.log
 .env.*
 !.env.example
+.envrc
+.direnv/
+
+# Local agent/assistant instructions
+AGENTS.md
 
 # Local permission-fix backups (generated when dev container runs as root)
+.apps.root-owned/
 .configs.root-owned/
 .crates.root-owned/
 .docs.root-owned/
 .github.root-owned/
 .migrations.root-owned/
+.platform.root-owned/
 .scripts.root-owned/
 .serena.root-owned/
 .target.root-owned/
 .tests.root-owned/
 .tools.root-owned/
+apps.root-owned/
 configs.root-owned/
 crates.root-owned/
 docs.root-owned/
 migrations.root-owned/
+platform.root-owned/
 scripts.root-owned/
 tests.root-owned/
 tools.root-owned/

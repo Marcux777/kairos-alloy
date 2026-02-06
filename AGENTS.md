@@ -1,44 +1,44 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- Root-level docs capture the product and delivery scope: `README.md`, `PRD.md`, `STARTUP_PLAN.md`, and `Kairos_Alloy_PRD_MVP_v0_2.pdf`.
-- Container tooling lives at `Dockerfile` and `docker/entrypoint.sh` (copies Codex config into the container on startup).
-- Devcontainer settings are in `.devcontainer/devcontainer.json` for VS Code/Antigravity workflows.
-- Rust workspace is split into `apps/` (executables) and `platform/` (domain/application/infrastructure).
-- Operational assets live under `platform/ops/` (`configs/`, `migrations/`, `scripts/`, `observability/`).
-- Python reference agents live under `apps/agents/`.
+- Product and delivery docs live at the root: `README.md`, `PRD.md`, `ARCHITECTURE.md`, `STARTUP_PLAN.md`, and `Kairos_Alloy_PRD_MVP_v0_2.pdf`.
+- Rust workspace members are split into `apps/` (executables such as `kairos-alloy`, `kairos-ingest`, `kairos-bench`) and `platform/` (domain/application/infrastructure crates).
+- Operational assets are under `platform/ops/` (`configs/`, `migrations/`, `scripts/`, `observability/`).
+- Python agents and research adapters live under `apps/agents/`.
+- Container and dev environment files live at `Dockerfile`, `docker/entrypoint.sh`, `docker-compose.yml`, and `.devcontainer/devcontainer.json`.
 
 ## Build, Test, and Development Commands
-Use the Docker-based environment described in `README.md`:
-- Build the dev image:
-  ```bash
-  docker build -t kairos-alloy-dev .
-  ```
-- Run the container with the repo and Codex config mounted:
-  ```bash
-  docker run -it \
-    -v ~/.codex:/codex-config \
-    -v "$(pwd)":/workspaces/kairos-alloy \
-    kairos-alloy-dev
-  ```
-- For WSL users, update the Codex mount path in `.devcontainer/devcontainer.json` if your distro/user differs.
+Preferred local workflow (mirrors CI):
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test --workspace --locked`
+- `cargo deny --locked check advisories bans licenses sources`
+
+Docker-based workflow (recommended for consistent onboarding):
+- `docker compose up -d db`
+- `docker compose run --rm dev`
+- Inside `dev`, run the same `cargo fmt`/`clippy`/`test` commands above.
+
+If your host setup differs (for example WSL paths), adjust mounts in `.devcontainer/devcontainer.json` and compose overrides as needed.
 
 ## Coding Style & Naming Conventions
-- No formatter or linter config is committed yet. When adding code, keep style consistent with the language defaults and add the relevant tooling config (e.g., `rustfmt.toml` for Rust).
-- Prefer lowercase, descriptive filenames and consistent module naming. Keep paths short and aligned with the eventual CLI layout described in the PRD.
+- Rust is the primary implementation language for core systems. Keep new production logic in Rust unless a component is explicitly Python-scoped (for agent servers/research tooling).
+- Formatting and linting are enforced in CI. Run `cargo fmt` and `cargo clippy` before opening PRs.
+- Prefer descriptive, lowercase file/module names and keep module boundaries aligned with `apps/` vs `platform/` responsibilities.
 
 ## Languages & Tooling (focus on Rust)
-- This repository focuses on the Rust system. Keep primary implementation, docs, and tooling centered on Rust.
-- When adding Rust code, include `rustfmt.toml` and configure `clippy` expectations; prefer `cargo fmt` and `cargo clippy` in docs.
-- If you choose different Rust tooling, document the commands in `README.md` and update this guide.
+- Keep primary implementation, documentation, and validation centered on Rust workspace tooling.
+- Maintain compatibility with committed toolchain/config files (`rust-toolchain.toml`, `rustfmt.toml`, `deny.toml`).
+- If you introduce or change tooling, update both `README.md` and this file in the same PR.
 
 ## Config & Secrets
 - Keep secrets out of the repo. Use local `.env` or host-level secrets; do not commit credentials.
-- If the app needs config defaults, document the expected keys and example values in a sample file (for example `platform/ops/configs/.env.example`).
+- Document new config keys with safe defaults in sample files (`.env.example`, `platform/ops/configs/*.toml`) and in `README.md`.
 
 ## Testing Guidelines
-- There is no test framework configured yet. When introducing code, add deterministic tests (unit and/or integration) and document how to run them in `README.md`.
-- Keep fixtures small and reproducible, aligned with the PRD’s determinism requirements.
+- Add deterministic unit/integration tests for new behavior and bug fixes.
+- Keep fixtures small and reproducible, aligned with PRD determinism requirements.
+- For database-backed paths, prefer existing PostgreSQL integration patterns and document any required setup (`docker compose up -d db`, `KAIROS_DB_URL`).
 
 ## Data & Determinism
 - Use fixed random seeds in tests and backtests unless explicitly testing stochastic behavior.
@@ -52,12 +52,14 @@ Use the Docker-based environment described in `README.md`:
 - Update this guide if the layout changes again.
 
 ## Commit & Pull Request Guidelines
-- Git history currently shows a Conventional Commit-style message (`chore: initial commit`). Follow that pattern: `type: short summary` (e.g., `feat: add backtest CLI skeleton`), and keep the subject imperative and under ~72 chars.
+- Follow Conventional Commits: `type(scope): short summary` when scope helps (for example `feat(engine): add slippage guard`).
+- Keep subjects imperative and around 72 chars or less.
 - Prefer small, focused commits; avoid mixing refactors with behavior changes, and include scope when helpful (e.g., `feat(engine): ...`).
 - PRs should include a concise description, linked issues/PRD references, and explicit validation steps (commands and results).
-- Add screenshots/log excerpts for CLI output or UX changes, and call out breaking changes or follow-ups.
-- For every significant implementation, create a dedicated branch for the work and use agents to complete required tasks. When finished and tests pass, merge into `main`.
+- Include CLI logs/screenshots for user-facing behavior changes and call out breaking changes or follow-up work.
+- For significant implementation work, use a dedicated branch, keep CI green, then merge to `main`.
 
 ## Documentation & Specs
 - Treat `PRD.md` as the source of truth for MVP requirements and CLI behavior. Update it if implementation details change.
-- Keep `README.md` current whenever build/run steps or tooling evolve.
+- Keep `README.md` current whenever build/run steps, observability, or tooling evolve.
+- Update `AGENTS.md` whenever repository layout, workflows, or quality gates change.
