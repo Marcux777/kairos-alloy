@@ -80,6 +80,8 @@ jobs:
             apps/agents/agent-dummy/agent_dummy.py \
             apps/agents/agent-llm/agent_llm.py \
             apps/agents/kairos-gym/kairos_gym.py \
+            apps/agents/train/optimize_bayes.py \
+            apps/agents/train/train_drl_sb3.py \
             notebooks/_lib/cpcv.py \
             platform/ops/scripts/compare_runs.py
 

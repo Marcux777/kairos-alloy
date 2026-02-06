@@ -86,6 +86,7 @@ Entregar um aplicativo de Interface de Terminal (TUI) em Rust que centralize a e
 - Fornecer infraestrutura para testar e validar agentes DRL com variáveis de preço, indicadores técnicos, ensemble LSTM/GRU e sentimento.
 - Permitir comparação contra estratégias baseline (ex.: buy-and-hold, média móvel) e contra benchmarks definidos no experimento.
 - Gerar relatórios e artefatos para análise (curva de patrimônio, lista de operações, métricas).
+- Habilitar otimização bayesiana de hiperparâmetros no pipeline de treino em Python, com avaliação paralela de trials para ampliar o espaço de busca de forma eficiente.
 
 ## 4. Público-alvo e stakeholders
 
@@ -113,9 +114,10 @@ Entregar um aplicativo de Interface de Terminal (TUI) em Rust que centralize a e
 
 - Execução com dinheiro real em corretora/exchange; integração direta com MetaTrader 5 em tempo real.
 - Treino de modelos (DRL, LSTM/GRU, NLP) dentro do Rust.
+- Otimização bayesiana de hiperparâmetros dentro do Rust (o caminho recomendado permanece no pipeline Python de treino).
 - Suporte completo a múltiplos ativos e rebalanceamento de portfólio multiativo.
 - Derivativos (futuros, margem, alavancagem), ordens limit/stop complexas.
-- Interface gráfica completa (web/desktop).
+- Qualquer interface alternativa fora da TUI.
 - **WFA (Walk-Forward Analysis):** re-otimizar parâmetros periodicamente durante o teste (evitar overfitting).
 - **Multi-exchange (Data Ingest):** abstrair a camada de conexão para plugar outras exchanges (ex.: Binance, Bybit).
 - **Optimize (paralelo em Rust):** rodar backtests em massa (grid/random search) com paralelismo real para achar parâmetros ideais.
@@ -306,6 +308,7 @@ Status em **2026-02-05**: decisões fechadas para o MVP.
 - **Vetor de observation (v1):** ordem fixa `retorno`, `SMA` (na ordem de `sma_windows`), `volatilidade` (na ordem de `volatility_windows`), `RSI` (se habilitado), `sentimento` (na ordem do schema carregado). Tipo numérico: `f64`. Normalização permanece no agente Python.
 - **Protocolo do agente (MVP):** HTTP/JSON com keep-alive (`POST /v1/act`, opcional `POST /v1/act_batch`), versionado por `api_version=v1` e `feature_version=v1`; fallback em falha: `HOLD`.
 - **Regra final de sentiment_lag:** default operacional `5m`; para cada barra `t`, usar apenas sentimento com `timestamp <= (t - sentiment_lag)`.
+- **HPO para treino (pós-MVP):** otimização bayesiana no pipeline Python, com avaliação paralela por `study.parallelism` (threads), artefato versionado com histórico de trials e melhores hiperparâmetros.
 
 ### Tabela de decisões fechadas
 
@@ -319,6 +322,7 @@ Status em **2026-02-05**: decisões fechadas para o MVP.
 | Definição final do vetor observation (campos, ordem, tipos, normalização) | Ordem fixa v1; `f64`; normalização no Python | Contrato entre Rust e Python; reduz risco de retrabalho | Engine + Agents Kairos |
 | Protocolo do agente em produção (HTTP vs gRPC/ZeroMQ) | HTTP/JSON keep-alive no MVP; reavaliar pós-MVP via profiling/throughput | Latência e throughput em backtests rápidos | Agents/Platform Kairos |
 | Definição de sentiment_lag e regra de alinhamento sentimento->barra | `sentiment_lag=5m` (default), com regra `ts_sent <= ts_bar - lag` | Evita look-ahead bias e garante reprodutibilidade | Research + Engine Kairos |
+| Estratégia de HPO para treino de modelos | Otimização bayesiana em Python com avaliação paralela por threads e artefato de trials | Escalabilidade de busca e reprodutibilidade de tuning | Research + Agents Kairos |
 
 ## 13. Referência interna
 
@@ -690,6 +694,7 @@ Entregáveis:
 
 - Evoluir `sweep` para honrar `parallelism` com execução concorrente real (rodar backtests em massa com saturação de CPU).
 - Otimização (grid/random search) com leaderboard, export dos melhores parâmetros e artefatos agregados.
+- Adicionar otimização bayesiana para treino de modelos (pipeline Python), com aquisição EI e avaliação paralela por threads para explorar hiperparâmetros de forma mais eficiente.
 - Implementar `walkforward` (WFA): por janela, rodar otimização in-sample, escolher best params, avaliar out-of-sample e repetir em janelas rolantes.
 - Artefatos do WFA (por run/sweep): `wfa_manifest.json`, `folds.csv`, `leaderboard.csv`, `best_params_by_fold.toml` e `summary.json` agregado.
 
@@ -697,6 +702,7 @@ Critérios de aceite:
 
 - Mesma entrada + mesmo grid + mesma seed ⇒ mesmos resultados (determinismo).
 - Throughput melhora ao aumentar `parallelism` (até saturar CPU).
+- Otimização bayesiana produz artefato com histórico de trials, melhor score e melhores hiperparâmetros para reproducibilidade do treino.
 - WFA gera métricas por fold e agregado, e permite comparar “WFA vs parâmetros fixos”.
 
 **Fase F — Conectores de dados (multi-exchange)**

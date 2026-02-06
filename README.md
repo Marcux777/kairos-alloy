@@ -81,6 +81,8 @@ cargo run -p kairos-alloy --
 
 O que esperar:
 
+- Antes de abrir a TUI, o bootstrap obrigatório tenta subir `db` via `docker compose`, aplica migrações e garante OHLCV `1min` para `2017-01-01T00:00:00Z..2025-12-31T23:59:59Z` do símbolo da config ativa.
+- O bootstrap é fail-fast: qualquer erro encerra o processo com mensagem explícita.
 - Ao iniciar `kairos-alloy`, voce cai direto em um menu interativo (TUI).
 - Navegacao: `↑/↓` + `Enter`, `Esc` para voltar ao menu, `Ctrl-C` para sair.
 - Em **Backtest**: `←/→` alterna entre Validate/Backtest/Paper; `r` roda; em Validate, `s` alterna strict.
@@ -130,6 +132,22 @@ Para pesquisa (DRL/Gym), existe um wrapper Python que reaproveita o contrato HTT
 - `apps/agents/kairos-gym/kairos_gym.py`: servidor `/v1/act` que bloqueia por passo e permite um loop `reset/step` (1 step = 1 candle).
 
 Este wrapper foi desenhado para suportar o pipeline acadêmico (ARTIGOS 2–6) sem exigir mudanças no Rust.
+
+## Otimizacao Bayesiana de hiperparametros (treino)
+
+Para ajustar hiperparametros de treino com busca bayesiana + paralelismo (threads):
+
+```bash
+python3 apps/agents/train/optimize_bayes.py --config platform/ops/configs/optimize/bayes_drl.toml
+```
+
+Notas:
+
+- `study.parallelism` controla quantos trials sao avaliados em paralelo.
+- O config padrao usa o script real `apps/agents/train/train_drl_sb3.py` (PPO + Kairos Gym).
+- O comando de treino em `[runner].command` imprime JSON no stdout contendo `study.metric_key`.
+- O resultado consolidado (trials + melhor conjunto de parametros) e salvo em `study.output_path`.
+- Dependencias de treino: `gymnasium` e `stable-baselines3` no ambiente Python.
 
 ## Agent DRL (playback / inferência)
 

@@ -23,3 +23,24 @@ Sweep configs live under `platform/ops/configs/sweeps/` and define a grid search
 Example:
 
 - `platform/ops/configs/sweeps/sma_grid.toml`
+
+## Bayesian Optimize (training / research)
+
+Bayesian hyperparameter optimization configs live under `platform/ops/configs/optimize/`.
+
+Example:
+
+- `platform/ops/configs/optimize/bayes_drl.toml`
+
+Run:
+
+```bash
+python3 apps/agents/train/optimize_bayes.py --config platform/ops/configs/optimize/bayes_drl.toml
+```
+
+Notes:
+
+- The optimizer evaluates trials in parallel threads (`study.parallelism`).
+- The default `bayes_drl.toml` command runs `apps/agents/train/train_drl_sb3.py` (PPO + Kairos Gym).
+- The training command (`[runner].command`) must print JSON in stdout with key `study.metric_key` (example: `{"val_sharpe": 1.21}`).
+- Artifacts are written to `study.output_path` (default under `runs/optimize/`).

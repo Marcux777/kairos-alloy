@@ -1,0 +1,48 @@
+# Bayesian hyperparameter optimization for model training.
+# Run:
+#   python3 apps/agents/train/optimize_bayes.py --config platform/ops/configs/optimize/bayes_drl.toml
+#
+# The command below runs a real trainer script:
+#   apps/agents/train/train_drl_sb3.py
+# It must print JSON in stdout with key `val_sharpe`.
+
+[study]
+id = "drl_bayes_v1"
+n_trials = 40
+init_random = 8
+parallelism = 4
+seed = 42
+maximize = true
+metric_key = "val_sharpe"
+output_path = "runs/optimize/drl_bayes_v1.json"
+candidate_pool = 512
+exploration = 0.01
+
+[runner]
+command = "python3 apps/agents/train/train_drl_sb3.py --base-config platform/ops/configs/sample.toml --mode sweep --split-start 2020-01-01T00:00:00Z --split-end 2020-02-01T00:00:00Z --learning-rate {learning_rate} --gamma {gamma} --batch-size {batch_size} --entropy-coef {entropy_coef} --net-arch {net_arch} --total-timesteps 20000 --eval-steps 3000 --seed 42 --device cpu"
+timeout_sec = 7200
+workdir = "."
+
+[space.learning_rate]
+type = "log_float"
+low = 0.00001
+high = 0.01
+
+[space.gamma]
+type = "float"
+low = 0.90
+high = 0.999
+
+[space.batch_size]
+type = "int"
+low = 64
+high = 512
+
+[space.entropy_coef]
+type = "log_float"
+low = 0.00001
+high = 0.05
+
+[space.net_arch]
+type = "categorical"
+choices = ["small", "medium", "large"]
